@@ -52,6 +52,7 @@ fn alternating() -> Task {
     }
 }
 
+/// Dominance pruning stops the search although prices never repeat.
 #[test]
 fn growing_prices_terminate_on_unsolvable_task() {
     let task = alternating();
@@ -61,6 +62,7 @@ fn growing_prices_terminate_on_unsolvable_task() {
     assert_eq!(checked_cost(&task, &factoring), None);
 }
 
+/// The same loop with a reachable goal still yields an optimal plan.
 #[test]
 fn growing_prices_still_find_a_goal_on_the_loop() {
     let mut task = alternating();

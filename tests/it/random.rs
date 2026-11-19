@@ -41,12 +41,17 @@ fn factorings(task: &Task) -> Vec<Factoring> {
 /// Checks every factoring of the random task for `seed` against Dijkstra and
 /// returns how many solvable, nonzero-cost runs had at least two leaves.
 fn check_seed(seed: u64, params: RandomTaskParams) -> u64 {
-    let task = random_task(seed, params);
-    let expected = optimal_cost(&task);
+    check_task(seed, &random_task(seed, params))
+}
+
+/// Checks every factoring of `task` (generated from `seed`) against Dijkstra
+/// and returns how many solvable, nonzero-cost runs had at least two leaves.
+fn check_task(seed: u64, task: &Task) -> u64 {
+    let expected = optimal_cost(task);
     let mut decoupled_runs = 0;
-    for factoring in factorings(&task) {
+    for factoring in factorings(task) {
         assert_eq!(
-            checked_cost(&task, &factoring),
+            checked_cost(task, &factoring),
             expected,
             "seed {seed}, factoring {factoring:?}"
         );
@@ -58,6 +63,7 @@ fn check_seed(seed: u64, params: RandomTaskParams) -> u64 {
     decoupled_runs
 }
 
+/// Default-sized random tasks under every factoring.
 #[test]
 fn optimal_costs_match_dijkstra_on_small_tasks() {
     let params = RandomTaskParams::default();
@@ -65,6 +71,7 @@ fn optimal_costs_match_dijkstra_on_small_tasks() {
     assert!(runs > SEEDS, "only {runs} multi-leaf runs");
 }
 
+/// Six-variable random tasks under every factoring.
 #[test]
 fn optimal_costs_match_dijkstra_on_larger_tasks() {
     let params = RandomTaskParams {
@@ -78,19 +85,24 @@ fn optimal_costs_match_dijkstra_on_larger_tasks() {
     assert!(runs > SEEDS, "only {runs} multi-leaf runs");
 }
 
+/// Zero-cost operators create price ties, which leaf closure and plan
+/// reconstruction must resolve without cycles.
 #[test]
-fn fork_factoring_sometimes_finds_leaves() {
+fn optimal_costs_match_dijkstra_with_zero_costs() {
     let params = RandomTaskParams {
-        num_vars: 6,
-        num_ops: 6,
+        num_vars: 5,
+        num_ops: 14,
         ..RandomTaskParams::default()
     };
-    let with_leaves = (0..SEEDS)
-        .filter(|&seed| {
-            !Factoring::fork(&random_task(seed, params))
-                .leaves()
-                .is_empty()
+    let runs: u64 = (0..SEEDS)
+        .map(|seed| {
+            let mut task = random_task(seed, params);
+            for op in task.operators.iter_mut().step_by(2) {
+                op.cost = 0;
+            }
+
+            check_task(seed, &task)
         })
-        .count();
-    assert!(with_leaves > 0);
+        .sum();
+    assert!(runs > SEEDS / 2, "only {runs} multi-leaf runs");
 }

@@ -19,6 +19,7 @@ fn tiny() -> Task {
     }
 }
 
+/// Axioms, conditional effects and invalid tasks are errors, not wrong plans.
 #[test]
 fn unsupported_tasks_are_rejected() {
     let mut task = tiny();
@@ -51,6 +52,7 @@ fn unsupported_tasks_are_rejected() {
     ));
 }
 
+/// Each malformed factoring gets its own error.
 #[test]
 fn malformed_factorings_are_rejected() {
     let task = tiny();

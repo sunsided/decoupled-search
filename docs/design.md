@@ -42,12 +42,13 @@ Strategies:
 2. **Explicit**, milestone 1, `Factoring::new(task, leaves)`. The caller names
    the leaves; the center is the rest. Used by tests to exercise arbitrary
    partitions.
-3. **Incident arcs / strongly connected star factorings**, milestone 3.
-   Candidate leaves from the causal graph's SCCs and their incident arcs, as in
-   the factoring strategies of Gnad and Hoffmann (2018); merge components while
-   the number of global actions stays low. Score a factoring by number of
+3. **Strict-star factorings**, milestone 3. Gnad, Poser and Hoffmann (2017)
+   detect general strict-star topologies, among them a greedy strategy that
+   moves highly connected variables (by incident causal-graph arcs) into the
+   center; port those after reading the paper (details here are not yet
+   checked against it). Score a factoring by number of
    leaves, leaf state-space sizes, and the share of operators that are leaf
-   actions; reject factorings with fewer than two leaves.
+   actions; consider rejecting factorings with fewer than two leaves.
 4. **Inverted fork / mobile leaves**, later. Only if benchmarks call for it.
 
 ## Decoupled state and pricing
@@ -110,10 +111,11 @@ optimality. Termination follows from Dickson's lemma: the comparison is a
 well-quasi-order on `(g, prices)` per center state, so no infinite sequence of
 pairwise non-dominated states exists.
 
-The store is a list per center state, scanned linearly. Milestone 2 replaces
-it with the stronger criteria of Torralba et al. (2016): leaf-state dominance
-(a leaf state that simulates another at no higher price makes the other
-irrelevant) and frontier-based comparison of price functions.
+The store is a list per center state, scanned linearly, and dominated nodes
+already in the open list are not removed. Milestone 2 replaces it with the
+stronger state-dominance criteria of Torralba et al. (2016); which of their
+criteria to implement (and how leaf-state simulation fits in) is still to be
+read from the paper.
 
 ## Solution reconstruction
 
@@ -148,15 +150,17 @@ pub trait DecoupledHeuristic {
 }
 ```
 
-Candidates: `h^max` / LM-cut over the center with leaf prices folded in as
-fact costs (as in Gnad and Hoffmann 2015), and abstraction heuristics from
+Candidates: `h^max` and LM-cut adapted to decoupled states (Gnad and
+Hoffmann 2015 evaluate `h^max` in fork-decoupled search; how they fold leaf
+prices in is not yet checked), and abstraction heuristics from
 `merge-and-shrink` behind an optional feature. Search becomes A* on
 `g + h`, with the same "stop when popped f >= best solution" rule.
 
 ## Unsupported input
 
-Milestone 1 rejects tasks with axioms (derived variables) or conditional
-effects with `Error::Unsupported`. Conditional effects on a leaf are
+Milestone 1 rejects tasks with axioms or derived variables
+(`Error::Axioms`) and operators with conditional effects
+(`Error::ConditionalEffects`). Conditional effects on a leaf are
 manageable (evaluate per rank); conditions spanning leaves are not, and would
 have to turn the operator into a global action with per-leaf case splits.
 Invalid tasks are rejected via `Task::validate`.
@@ -169,8 +173,11 @@ Invalid tasks are rejected via `Task::validate`.
   and decoupled search. Random tasks mostly have one causal-graph component,
   so the fork factoring alone would test nothing; the tests also run every
   seed under several explicit partitions (single-variable leaves, pairs,
-  center-empty) and assert that a nonzero number of solvable, nonzero-cost
-  cases with at least two leaves were seen.
+  center-empty) and assert that enough solvable, nonzero-cost cases with at
+  least two leaves were seen. A variant zeroes some operator costs, to
+  exercise ties in leaf closure and reconstruction.
+- **Fork shape.** A hand-built truck-and-packages task checks that the fork
+  factoring finds one center and two leaves.
 - **Plan validity.** Every returned plan passes `Task::validate_plan` with the
   reported cost.
 - **Termination on unsolvable tasks.** A hand-built task whose center loop
@@ -212,6 +219,8 @@ Invalid tasks are rejected via `Task::validate`.
 - Daniel Gnad and Jörg Hoffmann. *Star-Topology Decoupled State Space
   Search.* Artificial Intelligence 257 (2018), pp. 24–60.
   doi:10.1016/j.artint.2017.12.004.
+- Daniel Gnad, Valerie Poser and Jörg Hoffmann. *Beyond Forks: Finding and
+  Ranking Star Factorings for Decoupled Search.* IJCAI 2017, pp. 4310–4316.
 - Álvaro Torralba, Daniel Gnad, Patrick Dubbert and Jörg Hoffmann. *On
   State-Dominance Criteria in Fork-Decoupled Search.* IJCAI 2016,
   pp. 3265–3271.
