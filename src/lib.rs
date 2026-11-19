@@ -1,30 +1,124 @@
 //! # Decoupled search
 //!
-//! Decoupled search for factored SAS+ planning: center and leaf factoring, leaf reachability and leaf-state dominance.
+//! Decoupled (star-topology) search for factored SAS+ planning tasks from
+//! [`sas_plus`] (Gnad & Hoffmann, ICAPS 2015 and AIJ 2018).
 //!
-//! ## Planned scope
+//! A [`Factoring`] splits the variables into a *center* and *leaves*.
+//! [`search()`] then explores paths of *global actions* (operators that are not
+//! confined to one leaf) and keeps, for every leaf, the price of each leaf
+//! state reachable along the current path. It returns a cost-optimal
+//! sequential [`Plan`] for the original task.
 //!
-//! - Center/leaf factorings of SAS+ tasks
-//! - Decoupled state representation and leaf reachability
-//! - Leaf-state dominance pruning
-//! - Optional heuristics from merge-and-shrink
+//! ```mermaid
+//! graph LR
+//!     task[sas_plus::Task] --> factoring[Factoring::fork / Factoring::new]
+//!     factoring --> search[search: uniform-cost over decoupled states]
+//!     task --> search
+//!     search --> plan[Plan: sequential, cost-optimal]
+//! ```
 //!
 //! ## Status
 //!
-//! Pre-release. Version 0.0.0 reserves the name; the API is not started yet and will change.
+//! Pre-release, milestone 1 of `docs/design.md`: fork and explicit factorings,
+//! uniform-cost search with simple dominance pruning, no heuristics. Tasks
+//! with axioms or conditional effects are rejected. The API will change.
 //!
 //! Repository: <https://github.com/sunsided/decoupled-search>
 
 #![no_std]
 
-/// A partition of a task's variables into one center and several leaves.
-pub trait Factoring {
-    /// The variables in the center factor.
-    fn center_variables(&self) -> &[usize];
+extern crate alloc;
 
-    /// The number of leaf factors.
-    fn leaf_count(&self) -> usize;
+mod decoupled;
+mod factoring;
+mod search;
 
-    /// The variables in leaf factor `leaf`.
-    fn leaf_variables(&self, leaf: usize) -> &[usize];
+use alloc::vec::Vec;
+use core::fmt;
+
+use sas_plus::{OpId, TaskError, VarId};
+
+pub use factoring::Factoring;
+pub use search::search;
+
+/// The largest number of states a leaf may have; prices are stored densely
+/// per leaf state.
+pub const MAX_LEAF_STATES: usize = 1 << 16;
+
+/// A sequential plan for the original task.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Plan {
+    /// Operators in execution order, applicable from the initial state.
+    pub ops: Vec<OpId>,
+    /// Sum of the operator costs.
+    pub cost: u64,
+}
+
+/// Why a task or factoring cannot be searched.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Error {
+    /// The task failed [`sas_plus::Task::validate`].
+    InvalidTask(TaskError),
+    /// The task has axioms or derived variables, which are not supported yet.
+    Axioms,
+    /// Operator `op` has a conditional effect, which is not supported yet.
+    ConditionalEffects {
+        /// The offending operator.
+        op: OpId,
+    },
+    /// A leaf names variable `var`, which the task does not have.
+    UnknownVariable {
+        /// The offending variable.
+        var: VarId,
+    },
+    /// Variable `var` appears in two leaves, or twice in one.
+    DuplicateVariable {
+        /// The offending variable.
+        var: VarId,
+    },
+    /// Leaf `leaf` has no variables.
+    EmptyLeaf {
+        /// Index of the offending leaf.
+        leaf: usize,
+    },
+    /// Leaf `leaf` has more than [`MAX_LEAF_STATES`] states.
+    LeafTooLarge {
+        /// Index of the offending leaf.
+        leaf: usize,
+    },
+    /// The factoring does not partition exactly the task's variables, so it
+    /// was built for a different task.
+    FactoringMismatch,
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidTask(e) => write!(f, "invalid task: {e}"),
+            Self::Axioms => write!(f, "axioms and derived variables are not supported"),
+            Self::ConditionalEffects { op } => {
+                write!(
+                    f,
+                    "operator {op} has conditional effects, which are not supported"
+                )
+            }
+            Self::UnknownVariable { var } => write!(f, "unknown variable {var} in a leaf"),
+            Self::DuplicateVariable { var } => write!(f, "variable {var} appears twice"),
+            Self::EmptyLeaf { leaf } => write!(f, "leaf {leaf} is empty"),
+            Self::LeafTooLarge { leaf } => {
+                write!(f, "leaf {leaf} has more than {MAX_LEAF_STATES} states")
+            }
+            Self::FactoringMismatch => write!(f, "the factoring belongs to a different task"),
+        }
+    }
+}
+
+impl core::error::Error for Error {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::InvalidTask(e) => Some(e),
+            _ => None,
+        }
+    }
 }
