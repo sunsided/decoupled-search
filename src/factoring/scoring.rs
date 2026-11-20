@@ -17,6 +17,7 @@
 //! leaf-action share, then mobile leaves, then the smaller largest leaf.
 //! That ranking is ours.
 
+use alloc::vec::Vec;
 use core::cmp::Reverse;
 
 use sas_plus::Task;
@@ -24,6 +25,7 @@ use sas_plus::Task;
 use super::Factoring;
 use crate::Error;
 use crate::decoupled::DecoupledTask;
+use crate::search;
 
 /// A factoring strategy of [`Factoring`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -49,6 +51,84 @@ impl Strategy {
         Self::IncidentArcs,
         Self::MaxLeaves,
     ];
+}
+
+/// What [`Factoring::auto_by_sample`] selects for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Objective {
+    /// Cost-optimal planning: samples run decoupled A* with `h^max`.
+    Optimal,
+    /// Satisficing planning: samples run greedy best-first search with
+    /// `h^FF`.
+    Satisficing,
+}
+
+/// The measurements of one sample search, compared by
+/// [`Factoring::auto_by_sample`].
+#[derive(Clone, Copy, Debug)]
+struct Sample {
+    /// Whether the sample finished within its budget: proved its result
+    /// (cost-optimal), or found a plan or proved there is none
+    /// (satisficing).
+    solved: bool,
+    /// Expansions made.
+    expanded: u64,
+    /// Work units spent, at least 1.
+    work: u64,
+    /// Heuristic value of the initial state.
+    initial_h: u64,
+    /// Least heuristic value seen.
+    best_h: u64,
+}
+
+impl Sample {
+    /// Runs the sample search of `objective` on `factoring` for at most
+    /// `expansions` expansions; `None` if the search rejects the factoring.
+    fn run(
+        task: &Task,
+        factoring: &Factoring,
+        objective: Objective,
+        expansions: u64,
+    ) -> Option<Self> {
+        let optimal = objective == Objective::Optimal;
+        let (probe, expanded) = search::sample(task, factoring, optimal, expansions).ok()?;
+        let solved = !probe.cut_off;
+        Some(Self {
+            solved,
+            expanded,
+            work: probe.work.max(1),
+            initial_h: probe.initial_h.unwrap_or(0),
+            best_h: probe.best_h.unwrap_or(0),
+        })
+    }
+
+    /// Whether this sample ranks strictly above `other` under `objective`:
+    /// finished samples first, the less work among them; then, for
+    /// cost-optimal planning, more expansions per work unit (the paper's
+    /// expansions within a time limit), and for satisficing planning, the
+    /// larger heuristic improvement `initial_h / best_h`, then less work.
+    fn beats(&self, other: &Self, objective: Objective) -> bool {
+        let wide = u128::from;
+        if self.solved != other.solved {
+            return self.solved;
+        }
+
+        if self.solved {
+            return self.work < other.work;
+        }
+
+        match objective {
+            Objective::Optimal => {
+                wide(self.expanded) * wide(other.work) > wide(other.expanded) * wide(self.work)
+            }
+            Objective::Satisficing => {
+                let ours = wide(self.initial_h) * wide(other.best_h.max(1));
+                let theirs = wide(other.initial_h) * wide(self.best_h.max(1));
+                ours > theirs || (ours == theirs && self.work < other.work)
+            }
+        }
+    }
 }
 
 /// How well a factoring decouples a task.
@@ -278,5 +358,126 @@ impl Factoring {
                 || Self::from_leaves(task, alloc::vec::Vec::new()),
                 |(_, f)| f,
             )
+    }
+
+    /// The factoring of the strategy whose short sample search does best,
+    /// among those [`Factoring::auto`] would consider (two mobile leaves,
+    /// accepted by the search): Gnad, Poser and Hoffmann's (2017)
+    /// per-instance selection, with an expansion budget instead of a time
+    /// limit.
+    ///
+    /// Each distinct candidate runs a sample search of `objective` (see
+    /// [`Objective`]) for at most `expansions` expansions. A sample that
+    /// finishes (cost-optimal: proves its result; satisficing: finds a
+    /// plan) wins, the cheapest such one first; the paper would return its
+    /// plan, here the caller searches again. Otherwise, as in the paper,
+    /// satisficing planning prefers the larger heuristic improvement (the
+    /// initial state's `h^FF` over the least one seen), and cost-optimal
+    /// planning the faster expansion rate. With a budget of expansions
+    /// rather than of time, the rate is measured in deterministic work
+    /// units (per generated decoupled state, one plus the leaf states its
+    /// leaf closures range over), our proxy for time. Ties go to the earlier
+    /// strategy in [`Strategy::ALL`]. Without a candidate, the result is
+    /// the factoring without leaves; with one, no sample is run.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use decoupled_search::{Factoring, Objective, search};
+    /// use sas_plus::{Effect, Fact, Operator, State, Task, Variable};
+    ///
+    /// // A truck (0) and two packages that ride along.
+    /// let op = |pre: Vec<Fact>, eff: Fact| Operator {
+    ///     name: "op".into(),
+    ///     pre,
+    ///     eff: vec![Effect::new(eff)],
+    ///     cost: 1,
+    /// };
+    /// let task = Task {
+    ///     variables: vec![Variable::new("truck", 2), Variable::new("p", 3), Variable::new("q", 3)],
+    ///     operators: vec![
+    ///         op(vec![Fact::new(0, 0)], Fact::new(0, 1)),
+    ///         op(vec![Fact::new(0, 0), Fact::new(1, 0)], Fact::new(1, 2)),
+    ///         op(vec![Fact::new(0, 1), Fact::new(1, 2)], Fact::new(1, 1)),
+    ///         op(vec![Fact::new(0, 0), Fact::new(2, 0)], Fact::new(2, 2)),
+    ///         op(vec![Fact::new(0, 1), Fact::new(2, 2)], Fact::new(2, 1)),
+    ///     ],
+    ///     initial: State(vec![0, 0, 0]),
+    ///     goal: vec![Fact::new(1, 1), Fact::new(2, 1)],
+    ///     axioms: vec![],
+    /// };
+    ///
+    /// let factoring = Factoring::auto_by_sample(&task, Objective::Optimal, 100);
+    /// assert_eq!(factoring.leaves().len(), 2);
+    /// assert_eq!(search(&task, &factoring)?.map(|p| p.cost), Some(5));
+    /// # Ok::<(), decoupled_search::Error>(())
+    /// ```
+    #[must_use]
+    pub fn auto_by_sample(task: &Task, objective: Objective, expansions: u64) -> Self {
+        let mut candidates: Vec<Self> = Vec::new();
+        for &strategy in &Strategy::ALL {
+            let factoring = Self::with_strategy(task, strategy);
+            let usable = factoring
+                .score(task)
+                .is_ok_and(|score| score.mobile_leaves >= 2);
+            if usable && !candidates.contains(&factoring) {
+                candidates.push(factoring);
+            }
+        }
+
+        if candidates.len() <= 1 {
+            return candidates
+                .pop()
+                .unwrap_or_else(|| Self::from_leaves(task, Vec::new()));
+        }
+
+        let mut best: Option<(Sample, Self)> = None;
+        for factoring in candidates {
+            let Some(sample) = Sample::run(task, &factoring, objective, expansions) else {
+                continue;
+            };
+
+            if best
+                .as_ref()
+                .is_none_or(|(b, _)| sample.beats(b, objective))
+            {
+                best = Some((sample, factoring));
+            }
+        }
+
+        best.map_or_else(|| Self::from_leaves(task, Vec::new()), |(_, f)| f)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A sample with the given measurements.
+    fn sample(solved: bool, expanded: u64, work: u64, (initial_h, best_h): (u64, u64)) -> Sample {
+        Sample {
+            solved,
+            expanded,
+            work,
+            initial_h,
+            best_h,
+        }
+    }
+
+    /// Finished samples win, the cheaper first; then the expansion rate
+    /// (optimal) or the heuristic improvement (satisficing).
+    #[test]
+    fn samples_rank_as_the_paper_does() {
+        let (optimal, satisficing) = (Objective::Optimal, Objective::Satisficing);
+        let done = sample(true, 5, 50, (4, 0));
+        let faster = sample(false, 100, 1_000, (4, 2));
+        let slower = sample(false, 100, 3_000, (8, 2));
+        assert!(done.beats(&faster, optimal) && !faster.beats(&done, optimal));
+        assert!(sample(true, 9, 40, (4, 0)).beats(&done, optimal));
+
+        assert!(faster.beats(&slower, optimal) && !slower.beats(&faster, optimal));
+        // 8 / 2 beats 4 / 2 although it is slower.
+        assert!(slower.beats(&faster, satisficing) && !faster.beats(&slower, satisficing));
+        assert!(!faster.beats(&faster, satisficing), "ties do not win");
     }
 }

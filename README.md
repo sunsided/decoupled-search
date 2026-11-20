@@ -12,7 +12,9 @@ Pre-release. The API will change. Implemented (see
   and Hoffmann (IJCAI 2017), explicit partitions, and a strict-star check.
   `Factoring::score` reports leaves, mobile leaves, the leaf-action share
   and leaf sizes; `Factoring::auto` picks the best-scored strategy with at
-  least two mobile leaves and otherwise falls back to explicit search.
+  least two mobile leaves and otherwise falls back to explicit search;
+  `Factoring::auto_by_sample` picks by short sample searches instead
+  (the paper's selection, with an expansion budget instead of a clock).
 - Leaf reachability with prices (cheapest cost per leaf state along the
   center path); stored states keep only reached leaf states, as `u16` ranks
   with `u64` prices (no prices at all when all are 0).

@@ -91,7 +91,8 @@ the best by the larger leaf-action share (an exact fraction), more mobile
 leaves, the smaller largest leaf, and the earlier strategy. Factorings the
 search would reject are skipped; if none is left, the result is the
 factoring without leaves (explicit search). The paper ranks by one-second
-sample searches instead; see the table.
+sample searches; `Factoring::auto_by_sample` does that with an expansion
+budget instead of a clock (see the table).
 
 *Checked against the paper* (Gnad, Poser and Hoffmann, IJCAI 2017):
 
@@ -106,7 +107,7 @@ sample searches instead; see the table.
 | Fig. 1 | per round an argmax over the round's leaf sets (pseudocode: their size; prose: mobile leaves); return the round with the most mobile leaves | per round the most mobile leaves (the prose; the number of leaves is constant while growing), smallest variable on ties; between rounds the latest on ties | deliberate reading, ties ours |
 | Sec. 4.1 | all maximum independent sets found within 10 s | up to 16 within a deterministic work budget | deliberate deviation: `no_std`, reproducible |
 | Sec. 4 | abstain below two mobile leaves | `incident_arcs` and `max_leaves` return their best candidate anyway; `auto` abstains (no leaves) | deliberate: the strategy functions return a `Factoring`, not an `Option`; `auto` used to accept a single mobile leaf |
-| Sec. 5 | pick a factoring by 1 s sample searches: expansions (optimal), heuristic improvement (satisficing) | static score: leaf-action share, mobile leaves, largest leaf | deliberate deviation: no clock in `no_std`, and `auto` does not know the search configuration; open question |
+| Sec. 5 | pick a factoring by 1 s sample searches (LM-cut A\* / GBFS with `h^FF`); a sample that solves the task wins; else expansions (optimal) or heuristic improvement `h(I) / min h` (satisficing), higher better | `auto`: static score (leaf-action share, mobile leaves, largest leaf); opt-in `auto_by_sample(task, objective, expansions)`: samples of A\* with `h^max` or GBFS with `h^FF` under an expansion budget; finished samples win (least work first); optimal: expansions per work unit; satisficing: heuristic improvement, then less work | deliberate deviation: an expansion budget instead of a clock (`no_std`), so the expansion rate is measured in deterministic work units (per generated state, one plus its leaf states), and `h^max` instead of LM-cut; the chosen factoring is returned, not the sample's plan |
 | — | no axioms | the inputs of a derived variable count as adjacent in both strategies, so none is split over two leaves (`Error::AxiomAcrossLeaves`) | extension; regression test `strategies_keep_axiom_inputs_in_one_factor` |
 | Sec. 2 | causal graph arcs `pre ∪ eff -> eff` | `sas_plus::CausalGraph`, plus effect conditions and axioms | matches (the extra arcs only keep conditional effects and axioms inside one factor) |
 

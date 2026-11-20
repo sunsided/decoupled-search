@@ -414,6 +414,10 @@ struct Search<'t> {
     best: Option<(Price, usize)>,
     /// Counters.
     statistics: Statistics,
+    /// The most expansions to make; `None` for no limit.
+    limit: Option<u64>,
+    /// What a sample search measures.
+    probe: Probe,
 }
 
 /// Finds a cheapest plan for `task` by uniform-cost decoupled search over
@@ -683,6 +687,27 @@ impl Config {
         ),
         order: Order,
     ) -> Result<Outcome, Error> {
+        self.probe(task, factoring, (heuristic, root), order, None)
+            .map(|(outcome, _)| outcome)
+    }
+
+    /// [`Config::run`] that stops after `limit` expansions, if given, and
+    /// also reports what a sample search measures.
+    ///
+    /// # Errors
+    ///
+    /// As [`Config::search`].
+    fn probe(
+        &self,
+        task: &Task,
+        factoring: &Factoring,
+        (heuristic, root): (
+            Option<&dyn DecoupledHeuristic>,
+            Option<&dyn DecoupledHeuristic>,
+        ),
+        order: Order,
+        limit: Option<u64>,
+    ) -> Result<(Outcome, Probe), Error> {
         let mut decoupled = DecoupledTask::new(task, factoring)?;
         if self.leaves == Leaves::Reachability {
             if order != Order::Greedy {
@@ -715,6 +740,8 @@ impl Config {
             by_center: BTreeMap::new(),
             best: None,
             statistics,
+            limit,
+            probe: Probe::default(),
         };
         search.run();
         search.statistics.simulated_leaves = search.dominance.simulated_leaves();
@@ -724,11 +751,65 @@ impl Config {
             with_true_cost(task, plan, decoupled.is_reachability_only())
         });
 
-        Ok(Outcome {
+        let outcome = Outcome {
             plan,
             statistics: search.statistics,
-        })
+        };
+        Ok((outcome, search.probe))
     }
+}
+
+/// What a sample search measures (see [`sample`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Probe {
+    /// Whether the search stopped at its expansion limit rather than by
+    /// finishing.
+    pub(crate) cut_off: bool,
+    /// Work units spent: per generated decoupled state, one plus the number
+    /// of leaf states its leaf closures range over.
+    pub(crate) work: u64,
+    /// The heuristic value of the initial state; `None` if it was pruned.
+    pub(crate) initial_h: Option<Price>,
+    /// The least heuristic value of any stored state.
+    pub(crate) best_h: Option<Price>,
+}
+
+/// A sample search for factoring selection: decoupled A* with `h^max`
+/// (cost-optimal) or greedy best-first search with `h^FF` (not), each with
+/// the default [`Config`], stopped after `expansions` expansions. Returns
+/// the probe and the number of expansions.
+///
+/// # Errors
+///
+/// As [`Config::search`].
+pub(crate) fn sample(
+    task: &Task,
+    factoring: &Factoring,
+    optimal: bool,
+    expansions: u64,
+) -> Result<(Probe, u64), Error> {
+    let config = Config::default();
+    let (outcome, probe) = if optimal {
+        let h = crate::HMax::new(task);
+        config.probe(
+            task,
+            factoring,
+            (Some(&h), None),
+            Order::Cost,
+            Some(expansions),
+        )?
+    } else {
+        let h = crate::HFf::new(task);
+        config.probe(
+            task,
+            factoring,
+            (Some(&h), None),
+            Order::Greedy,
+            Some(expansions),
+        )?
+    };
+
+    Ok((probe, outcome.statistics.expanded))
 }
 
 impl Config {
@@ -906,6 +987,14 @@ impl Search<'_> {
                 break;
             }
 
+            if self
+                .limit
+                .is_some_and(|limit| self.statistics.expanded >= limit)
+            {
+                self.probe.cut_off = true;
+                break;
+            }
+
             self.statistics.expanded += 1;
             let g = self.nodes[id].g;
             for (action, state) in self.task.successors(&self.nodes[id].state) {
@@ -957,10 +1046,9 @@ impl Search<'_> {
     fn insert(&mut self, state: DecoupledState, g: Price, parent: Option<(usize, usize)>) {
         self.statistics.generated += 1;
         let work = self.task.leaves.iter().map(|l| l.size).sum::<usize>() + 1;
-        if self
-            .dominance
-            .record_work(self.task, u64::try_from(work).unwrap_or(u64::MAX))
-        {
+        let work = u64::try_from(work).unwrap_or(u64::MAX);
+        self.probe.work = self.probe.work.saturating_add(work);
+        if self.dominance.record_work(self.task, work) {
             for node in &mut self.nodes {
                 node.bounds = None;
             }
@@ -976,6 +1064,7 @@ impl Search<'_> {
             return;
         };
 
+        self.probe.initial_h.get_or_insert(h);
         let Some(key) = self.key(&state, g, h) else {
             self.statistics.dead_ends += 1;
             return;
@@ -1002,6 +1091,7 @@ impl Search<'_> {
             .entry(state.center.clone())
             .or_default()
             .push(id);
+        self.probe.best_h = Some(self.probe.best_h.map_or(h, |b| b.min(h)));
         self.open.push(Reverse((key, id)));
         self.nodes.push(Node {
             state,

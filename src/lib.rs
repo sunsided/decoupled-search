@@ -52,7 +52,7 @@ use core::fmt;
 
 use sas_plus::{OpId, TaskError, VarId};
 
-pub use factoring::{Factoring, FactoringScore, Strategy};
+pub use factoring::{Factoring, FactoringScore, Objective, Strategy};
 #[cfg(feature = "merge-and-shrink")]
 pub use heuristic::MasHeuristic;
 pub use heuristic::{DecoupledHeuristic, FactPrices, HFf, HMax};

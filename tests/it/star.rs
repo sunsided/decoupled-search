@@ -1,7 +1,7 @@
 //! Random tasks with a star-shaped causal graph by construction, and the
 //! automatic star factorings on them.
 
-use decoupled_search::{Error, Factoring, Strategy};
+use decoupled_search::{Error, Factoring, Objective, Strategy};
 use sas_plus::random::{RandomTaskParams, Rng, random_task};
 use sas_plus::{Axiom, Effect, Fact, Operator, State, Task, VarId, Variable};
 
@@ -440,4 +440,38 @@ fn x_shape_adds_inverted_fork_leaves_apart_from_fork_leaves() {
     assert_eq!(factoring.leaves(), &[vec![2]]);
     assert_eq!(factoring.center(), &[0, 1]);
     assert_eq!(checked_cost(&task, &factoring), Some(3));
+}
+
+/// Sample-search selection picks one of the candidates `auto` considers
+/// (or abstains exactly when there is none), under which search matches
+/// Dijkstra, for both objectives; and it does not always agree with the
+/// static ranking.
+#[test]
+fn auto_by_sample_picks_a_candidate() {
+    let mut differs = 0;
+    for seed in 0..SEEDS / 4 {
+        let task = random_star_task(seed);
+        let candidates: Vec<Factoring> = Strategy::ALL
+            .iter()
+            .map(|&s| Factoring::with_strategy(&task, s))
+            .filter(|f| f.score(&task).is_ok_and(|s| s.mobile_leaves >= 2))
+            .collect();
+        for objective in [Objective::Optimal, Objective::Satisficing] {
+            let chosen = Factoring::auto_by_sample(&task, objective, 20);
+            if candidates.is_empty() {
+                assert!(chosen.leaves().is_empty(), "seed {seed}");
+                continue;
+            }
+
+            assert!(candidates.contains(&chosen), "seed {seed}: {chosen:?}");
+            assert_eq!(
+                checked_cost(&task, &chosen),
+                optimal_cost(&task),
+                "seed {seed}"
+            );
+            differs += u64::from(chosen != Factoring::auto(&task));
+        }
+    }
+
+    assert!(differs > 0, "always the static choice");
 }

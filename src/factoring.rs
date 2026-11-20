@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 
 use sas_plus::{CausalGraph, Task, VarId};
 
-pub use scoring::{FactoringScore, Strategy};
+pub use scoring::{FactoringScore, Objective, Strategy};
 
 use crate::{Error, MAX_LEAF_STATES};
 
