@@ -7,7 +7,7 @@
 //! [`Config::max_analysis_states`](crate::Config::max_analysis_states)
 //! states always use the basic bound.
 
-mod simulation;
+pub(crate) mod simulation;
 
 use alloc::collections::BinaryHeap;
 use alloc::vec;
@@ -15,7 +15,7 @@ use alloc::vec::Vec;
 
 use crate::decoupled::{DecoupledState, DecoupledTask, LeafPart, Price, Prices};
 use crate::{Config, Pruning};
-use simulation::Bits;
+pub(crate) use simulation::Bits;
 
 /// A bound value: a price, `+∞` for "not reachable", `-∞` for "no purpose".
 type Bound = i128;
@@ -36,9 +36,17 @@ struct Analysis {
     successors: Vec<Vec<(usize, Price)>>,
     /// Per leaf state: `(predecessor, cost)`, the reverse of `successors`.
     predecessors: Vec<Vec<(usize, Price)>>,
-    /// Per leaf state, its simulators; `None` unless the criterion uses
-    /// simulation.
-    simulators: Option<Vec<Bits>>,
+}
+
+/// When [`Pruning::Adaptive`] switches from effective prices to effective
+/// simulation.
+#[derive(Debug)]
+struct Escalation {
+    /// Estimated cost of computing every leaf simulation, in the units of
+    /// [`Dominance::record_work`].
+    budget: u64,
+    /// Work recorded so far.
+    spent: u64,
 }
 
 /// The dominance criterion compiled for one decoupled task.
@@ -52,6 +60,14 @@ pub(crate) struct Dominance {
     greedy: bool,
     /// Per leaf, its analysis; `None` for leaves that use the basic bound.
     leaves: Vec<Option<Analysis>>,
+    /// Per leaf, its simulators, once computed; `None` for leaves without
+    /// (center-dependent, too large, or not needed).
+    simulations: Vec<Option<Vec<Bits>>>,
+    /// Per leaf, whether it may be analysed: small enough and with
+    /// center-independent transitions.
+    eligible: Vec<bool>,
+    /// The pending switch of [`Pruning::Adaptive`], if any.
+    escalation: Option<Escalation>,
 }
 
 /// The bounds `D_t` of a stored state, per leaf; `None` for leaves where
@@ -64,30 +80,109 @@ pub(crate) type Frontier = Vec<Option<Vec<bool>>>;
 
 impl Dominance {
     /// Compiles the criterion of `config` for `task`; `greedy` drops cost
-    /// comparisons.
+    /// comparisons. Computes leaf simulations up front if the criterion
+    /// uses them or [`Config::reduce_leaves`] is set; [`Pruning::Adaptive`]
+    /// otherwise starts with effective prices.
     pub(crate) fn new(task: &DecoupledTask, config: &Config, greedy: bool) -> Self {
-        let analysed = config.pruning != Pruning::Basic;
-        let leaves = (0..task.leaves.len())
+        let eligible: Vec<bool> = (0..task.leaves.len())
             .map(|leaf| {
-                let parts: Vec<&LeafPart> = task
-                    .globals
-                    .iter()
-                    .filter_map(|g| g.parts[leaf].as_ref())
-                    .collect();
                 let compiled = &task.leaves[leaf];
-                (analysed
-                    && compiled.size <= config.max_analysis_states
-                    && !compiled.reads_center(parts.iter().copied()))
-                .then(|| analyse(task, leaf, &parts, config.pruning))
+                compiled.size <= config.max_analysis_states
+                    && !compiled.reads_center(parts(task, leaf))
             })
             .collect();
+        let pruning = match config.pruning {
+            Pruning::Adaptive if config.reduce_leaves => Pruning::EffectiveSimulation,
+            Pruning::Adaptive => Pruning::EffectivePrices,
+            other => other,
+        };
+        let leaves = eligible
+            .iter()
+            .enumerate()
+            .map(|(leaf, &ok)| (ok && pruning != Pruning::Basic).then(|| analyse(task, leaf)))
+            .collect();
 
-        Self {
-            pruning: config.pruning,
+        let mut dominance = Self {
+            pruning,
             fold_g: config.fold_g,
             greedy,
             leaves,
+            simulations: vec![None; task.leaves.len()],
+            eligible,
+            escalation: None,
+        };
+        if uses_simulation(pruning) || config.reduce_leaves {
+            dominance.simulate(task);
+        } else if config.pruning == Pruning::Adaptive {
+            let budget = dominance.simulation_cost(task);
+            dominance.escalation = (budget > 0).then_some(Escalation { budget, spent: 0 });
         }
+
+        dominance
+    }
+
+    /// Computes the simulation of every eligible leaf.
+    fn simulate(&mut self, task: &DecoupledTask) {
+        for (leaf, simulation) in self.simulations.iter_mut().enumerate() {
+            if self.eligible[leaf] && simulation.is_none() {
+                let parts: Vec<&LeafPart> = parts(task, leaf).collect();
+                *simulation = Some(simulation::simulators(&task.leaves[leaf], &parts));
+            }
+        }
+    }
+
+    /// An estimate of what [`Dominance::simulate`] costs: per eligible leaf,
+    /// `size^2` pairs times one plus its number of leaf actions.
+    fn simulation_cost(&self, task: &DecoupledTask) -> u64 {
+        let widen = |n: usize| u64::try_from(n).unwrap_or(u64::MAX);
+        task.leaves
+            .iter()
+            .zip(&self.eligible)
+            .filter(|&(_, &ok)| ok)
+            .map(|(leaf, _)| {
+                let size = widen(leaf.size);
+                size.saturating_mul(size)
+                    .saturating_mul(widen(leaf.actions.len()) + 1)
+            })
+            .fold(0, u64::saturating_add)
+    }
+
+    /// Records `work` units of search effort (the leaf states of one
+    /// generated decoupled state). Under [`Pruning::Adaptive`], once the
+    /// search has spent as much as the leaf simulations are estimated to
+    /// cost, computes them and switches to effective simulation; returns
+    /// `true` then, so that cached bounds are recomputed.
+    ///
+    /// This is the ski-rental rule: on tasks the search finishes cheaply
+    /// the simulation is never paid for, and otherwise it costs at most
+    /// about as much as the search has already spent.
+    pub(crate) fn record_work(&mut self, task: &DecoupledTask, work: u64) -> bool {
+        let Some(escalation) = &mut self.escalation else {
+            return false;
+        };
+
+        escalation.spent = escalation.spent.saturating_add(work);
+        if escalation.spent < escalation.budget {
+            return false;
+        }
+
+        self.escalation = None;
+        self.simulate(task);
+        self.pruning = Pruning::EffectiveSimulation;
+        true
+    }
+
+    /// The number of leaves whose simulation has been computed.
+    pub(crate) fn simulated_leaves(&self) -> u64 {
+        self.simulations
+            .iter()
+            .map(|s| u64::from(s.is_some()))
+            .sum()
+    }
+
+    /// The simulators of leaf `leaf`, if computed.
+    pub(crate) fn simulators(&self, leaf: usize) -> Option<&[Bits]> {
+        self.simulations[leaf].as_deref()
     }
 
     /// Whether the criterion compares only on frontiers.
@@ -105,15 +200,24 @@ impl Dominance {
                 let analysis = analysis.as_ref()?;
                 (!self.uses_frontier()).then(|| {
                     let size = task.leaves[leaf].size;
-                    self.leaf_bounds(analysis, prices, size)
+                    self.leaf_bounds(leaf, analysis, prices, size)
                 })
             })
             .collect()
     }
 
     /// The bounds of one leaf with `prices` under `analysis`.
-    fn leaf_bounds(&self, analysis: &Analysis, prices: &Prices, size: usize) -> Vec<Bound> {
-        let base = if let Some(simulators) = &analysis.simulators {
+    fn leaf_bounds(
+        &self,
+        leaf: usize,
+        analysis: &Analysis,
+        prices: &Prices,
+        size: usize,
+    ) -> Vec<Bound> {
+        let simulators = self
+            .simulators(leaf)
+            .filter(|_| uses_simulation(self.pruning));
+        let base = if let Some(simulators) = simulators {
             simulation_bounds(simulators, prices, size)
         } else {
             let mut base = vec![INFINITE; size];
@@ -128,7 +232,7 @@ impl Dominance {
             Pruning::EffectivePrices | Pruning::EffectiveSimulation => {
                 effective_prices(analysis, &base)
             }
-            Pruning::Basic | Pruning::Frontier | Pruning::Simulation => base,
+            Pruning::Basic | Pruning::Frontier | Pruning::Simulation | Pruning::Adaptive => base,
         }
     }
 
@@ -222,8 +326,22 @@ fn slack(
     Some(delta)
 }
 
-/// The static analysis of leaf `leaf` for criterion `pruning`.
-fn analyse(task: &DecoupledTask, leaf: usize, parts: &[&LeafPart], pruning: Pruning) -> Analysis {
+/// Whether `pruning` compares through leaf simulations.
+fn uses_simulation(pruning: Pruning) -> bool {
+    matches!(pruning, Pruning::Simulation | Pruning::EffectiveSimulation)
+}
+
+/// The leaf parts on leaf `leaf` of all global actions.
+fn parts(task: &DecoupledTask, leaf: usize) -> impl Iterator<Item = &LeafPart> + Clone {
+    task.globals
+        .iter()
+        .filter_map(move |g| g.parts[leaf].as_ref())
+}
+
+/// The static analysis of leaf `leaf`: anchored states and leaf
+/// transitions under any center.
+fn analyse(task: &DecoupledTask, leaf: usize) -> Analysis {
+    let parts: Vec<&LeafPart> = parts(task, leaf).collect();
     let compiled = &task.leaves[leaf];
     let view = compiled.static_view();
     let anchored = (0..compiled.size)
@@ -244,14 +362,10 @@ fn analyse(task: &DecoupledTask, leaf: usize, parts: &[&LeafPart], pruning: Prun
         }
     }
 
-    let simulators = matches!(pruning, Pruning::Simulation | Pruning::EffectiveSimulation)
-        .then(|| simulation::simulators(compiled, parts));
-
     Analysis {
         anchored,
         successors,
         predecessors,
-        simulators,
     }
 }
 

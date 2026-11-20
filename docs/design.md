@@ -157,7 +157,8 @@ reached in `n`: what `t` must pay to do whatever `n` can do from `x`.
 | `Frontier` | `price_t(x)`, only on the frontier of `n` | Defs. 2, 3 |
 | `EffectivePrices` | least `p` with `p = price_t` on anchored states, `p(x) = min(price_t(x), max_{x -a-> y} p(y) - cost(a))` elsewhere | Def. 4 |
 | `Simulation` | `min_{x ⪯ y} price_t(y)` for the leaf simulation `⪯` | Defs. 5, 6 |
-| `EffectiveSimulation` (default) | effective prices over simulation bounds | Def. 7 |
+| `EffectiveSimulation` | effective prices over simulation bounds | Def. 7 |
+| `Adaptive` (default) | `EffectivePrices`, then `EffectiveSimulation` once the search has spent the simulation's estimated cost | ours |
 
 *Generalisation.* The paper assumes fork factorings with a single goal leaf
 state, where only leaf actions move a leaf. Here global actions may read
@@ -209,8 +210,32 @@ every other one subsumes: the comparison is a well-quasi-order on
 `(g, prices)` per center state, so no infinite sequence of pairwise
 non-dominated states exists.
 
-The paper also uses simulation to remove superfluous leaf states and
-actions from the leaf state spaces; that is not implemented.
+*Adaptive default.* Simulation costs `O(size^2 * actions)` per leaf once
+per search, which dominated small searches (gripper: 1.24 ms against
+24 µs for `Basic`). `Pruning::Adaptive` follows the ski-rental rule: it
+uses effective prices, counts one work unit per leaf state of every
+generated decoupled state, and computes the simulations and switches to
+`EffectiveSimulation` once the work reaches `Σ size^2 * (1 + leaf actions)`
+over the analysed leaves. Mixing sound criteria is sound; cached bounds
+are recomputed after the switch. Measured on gripper (fork, uniform-cost,
+release, criterion `--quick`): `Basic` 22 µs, `Adaptive` 40–57 µs,
+`EffectiveSimulation` 700–750 µs.
+
+*Leaf reduction* (`Config::reduce_leaves`, default off). The paper also
+uses simulation to remove superfluous leaf transitions and then leaf states
+(details in its technical report, not checked). Our rule: remove
+`x -a-> x'` if `x' ⪯ x`, or if another leaf action `b` applicable in `x`
+with `cost(b) <= cost(a)`, center preconditions contained in `a`'s, a
+smaller key `(cost, |center pre|, index)` and `x -b-> y'` has `x' ⪯ y'`.
+Leaf closure skips removed transitions, so leaf states only reachable
+through them are never reached. Soundness (proof on `Config::reduce_leaves`):
+the first removed step of any compliant leaf path is replaced, via a
+well-founded chain of keys, by a kept step or by staying, and the rest of
+the path is mirrored by the simulation; repeating terminates, so the
+reduced system loses no completion and no cost. On the Logistics example
+it removes the five unloads at non-goal locations and the load at the goal
+(those states become unreachable) and stores fewer decoupled states.
+Reconstruction runs the same reduced closure, so plans stay consistent.
 
 ## Reachability-only leaves
 
@@ -383,8 +408,10 @@ Invalid tasks are rejected via `Task::validate`.
 5. **Done.** Conditional effects and axioms where decoupling allows;
    `Plan::validate`; a public `FactPrices` constructor.
 
-Open: simulation-based leaf state-space reduction, LM-cut, an index for
-the dominance store.
+Done since: simulation-based leaf reduction and the adaptive default.
+Open: LM-cut, an index for the dominance store, decoupled symbolic search,
+decoupled partial-order reduction (strong stubborn sets), and multiple
+centers.
 
 ## Cross-crate needs
 

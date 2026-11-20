@@ -82,7 +82,7 @@ fn stronger_criteria_avoid_the_logistics_blow_up() {
     assert_eq!(checked_cost(&task, &factoring), expected);
 
     let stored = PRUNINGS.map(|p| statistics(&task, &factoring, p, expected).stored);
-    let [basic, frontier, effective, simulation, both] = stored;
+    let [basic, frontier, effective, simulation, both, _] = stored;
     assert!(frontier < basic, "{stored:?}");
     assert!(effective <= frontier, "{stored:?}");
     assert!(simulation < basic, "{stored:?}");
@@ -97,7 +97,7 @@ fn stronger_criteria_shrink_exhaustive_searches() {
     task.operators.retain(|op| op.name != "unload-1");
     let factoring = Factoring::fork(&task);
     let stored = PRUNINGS.map(|p| statistics(&task, &factoring, p, None).stored);
-    let [basic, frontier, effective, simulation, both] = stored;
+    let [basic, frontier, effective, simulation, both, _] = stored;
     assert!(basic > 2 * frontier, "{stored:?}");
     assert!(effective <= frontier, "{stored:?}");
     assert!(basic > 2 * simulation, "{stored:?}");
@@ -147,4 +147,73 @@ fn stronger_settings_prune_more_on_random_tasks() {
     assert!(effective < folded, "{stored:?}");
     assert!(simulation < folded, "{stored:?}");
     assert!(both < folded, "{stored:?}");
+}
+
+/// Leaf reduction on the Logistics example: unloading anywhere but the goal
+/// and loading at the goal are redundant (the truck simulates the other
+/// locations, the goal simulates the truck), so fewer leaf states are
+/// reached and fewer decoupled states stored, at the same cost.
+#[test]
+fn leaf_reduction_shrinks_the_logistics_leaf() {
+    let task = logistics(6);
+    let factoring = Factoring::fork(&task);
+    let run = |reduce_leaves| {
+        let config = Config {
+            pruning: Pruning::Basic,
+            reduce_leaves,
+            ..Config::default()
+        };
+        let outcome = config.search(&task, &factoring).expect("supported");
+        assert_eq!(outcome.plan.map(|p| p.cost), Some(3));
+        outcome.statistics
+    };
+
+    let (full, reduced) = (run(false), run(true));
+    assert_eq!(full.reduced_leaf_transitions, 0);
+    // 5 non-goal unloads and the load at the goal.
+    assert_eq!(reduced.reduced_leaf_transitions, 6);
+    assert_eq!(
+        reduced.unreachable_leaf_states, 4,
+        "only start, truck and goal stay"
+    );
+    assert!(reduced.stored < full.stored, "{reduced:?} vs {full:?}");
+}
+
+/// The adaptive default skips the simulation on quick searches and computes
+/// it on long ones (Dijkstra agreement is checked with every other
+/// configuration in `checked_cost`).
+#[test]
+fn adaptive_pruning_simulates_only_when_it_pays() {
+    let quick = logistics(3);
+    let factoring = Factoring::fork(&quick);
+    let stats = statistics(&quick, &factoring, Pruning::Adaptive, Some(3));
+    assert_eq!(stats.simulated_leaves, 0, "{stats:?}");
+
+    let params = RandomTaskParams {
+        num_vars: 6,
+        max_domain: 3,
+        num_ops: 16,
+        max_cost: 4,
+        ..RandomTaskParams::default()
+    };
+    let (mut skipped, mut simulated) = (0, 0);
+    for seed in 0..50 {
+        let task = random_task(seed, params);
+        let factoring = Factoring::new(&task, vec![vec![0, 1], vec![2, 3]]).expect("valid");
+        let config = Config::default();
+        let stats = config
+            .search(&task, &factoring)
+            .expect("supported")
+            .statistics;
+        if stats.simulated_leaves == 0 {
+            skipped += 1;
+        } else {
+            simulated += 1;
+        }
+    }
+
+    assert!(
+        skipped > 0 && simulated > 0,
+        "{skipped} skipped, {simulated} simulated"
+    );
 }

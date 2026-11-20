@@ -18,8 +18,10 @@ Pre-release. The API will change. Implemented (see
   `Config` choosing the dominance criterion: basic, frontier, effective
   prices, leaf simulation, or effective prices over simulation (Torralba,
   Gnad, Dubbert and Hoffmann 2016, generalised to global actions that touch
-  leaves), optionally with one `g` budget shared by all leaves. Search
-  statistics come with every `Outcome`.
+  leaves), optionally with one `g` budget shared by all leaves; the
+  default switches to simulation only once the search has spent its cost.
+  Optional simulation-based leaf reduction (`Config::reduce_leaves`).
+  Search statistics come with every `Outcome`.
 - Reachability-only leaves (no prices) for GBFS.
 - Conditional effects on a leaf conditioned on the center and that leaf,
   on the center conditioned on the center; derived variables that depend on

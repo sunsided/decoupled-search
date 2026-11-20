@@ -29,7 +29,7 @@ use sas_plus::{Task, Value};
 
 use crate::decoupled::{DecoupledState, DecoupledTask, Price};
 use crate::{DecoupledHeuristic, Error, Factoring, Plan};
-use dominance::{Bounds, Dominance};
+use dominance::{Bounds, Dominance, simulation};
 
 /// How the open list is ordered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -173,8 +173,25 @@ pub enum Pruning {
     /// goal leaf state whenever the original does, and costs no more.
     Simulation,
     /// Effective prices over simulation bounds; the strongest criterion.
-    #[default]
     EffectiveSimulation,
+    /// [`Pruning::EffectivePrices`] until the search has spent about as
+    /// much as computing the leaf simulations would cost, then
+    /// [`Pruning::EffectiveSimulation`] (the default).
+    ///
+    /// Computing a leaf simulation takes time quadratic in the leaf size,
+    /// which dominates searches on small tasks. The switch follows the
+    /// ski-rental rule: the work unit is one leaf state of a generated
+    /// decoupled state (leaf closure touches every leaf state of every
+    /// successor), and the simulation's estimated cost is the sum of
+    /// `size^2 * (1 + leaf actions)` over the analysed leaves. A search that
+    /// ends earlier never pays for simulation; otherwise it pays at most
+    /// about twice the better of the two choices. Both criteria are sound,
+    /// so mixing them in one search is too; bounds cached under effective
+    /// prices are recomputed after the switch. With
+    /// [`Config::reduce_leaves`], the simulation is needed up front, and
+    /// this is [`Pruning::EffectiveSimulation`] from the start.
+    #[default]
+    Adaptive,
 }
 
 /// What a decoupled state keeps per leaf state.
@@ -230,7 +247,7 @@ pub enum Leaves {
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Config {
-    /// The dominance criterion. Default: [`Pruning::EffectiveSimulation`].
+    /// The dominance criterion. Default: [`Pruning::Adaptive`].
     pub pruning: Pruning,
     /// Whether a stored state may dominate one reached more cheaply, when
     /// its cheaper prices pay for the difference in `g` (one budget shared
@@ -245,6 +262,42 @@ pub struct Config {
     /// round, effective prices keep one bound per leaf state in every
     /// stored state. Default: 256.
     pub max_analysis_states: usize,
+    /// Whether to shrink the leaf state spaces by leaf simulation before
+    /// searching (Torralba et al. 2016, Section 6, in our own formulation;
+    /// their exact rule is in a technical report not checked here).
+    /// Default: `false`.
+    ///
+    /// On every analysed leaf (see [`Config::max_analysis_states`]), the
+    /// leaf simulation `⪯` of [`Pruning::Simulation`] is computed once, and
+    /// a leaf transition `x -a-> x'` is removed if
+    ///
+    /// 1. `x' ⪯ x`: staying at `x` is as good, or
+    /// 2. another leaf action `b` applicable in `x`, `x -b-> y'`, has
+    ///    `cost(b) <= cost(a)`, center preconditions contained in `a`'s, a
+    ///    smaller key `(cost, number of center preconditions, index)`, and
+    ///    `x' ⪯ y'`.
+    ///
+    /// Leaf closure then skips removed transitions, so fewer leaf states
+    /// are reached and stored ([`Statistics::reduced_leaf_transitions`] and
+    /// [`Statistics::unreachable_leaf_states`] report the effect).
+    ///
+    /// *Soundness.* Take any compliant leaf path `ρ` of the full leaf
+    /// system, and its first removed step `s_i -a-> s_{i+1}`. Under rule 2
+    /// its replacement `b` may be removed too, but then by a still smaller
+    /// key, so the chain ends in a kept step `s_i -c-> z` (or in staying,
+    /// rule 1) with `s_{i+1} ⪯ z` by transitivity. `c` is applicable
+    /// wherever `a` was (weaker center preconditions) and no dearer. By the
+    /// simulation, the rest of `ρ` is mirrored from `z` at no higher cost,
+    /// in no more steps, meeting the same global preconditions and ending
+    /// in a goal leaf state. Repeating at the next removed step terminates:
+    /// each round either fixes one more step or (rule 1) shortens the
+    /// path. So every completion of the full system has one of the reduced
+    /// system at no higher cost, which preserves optimality and
+    /// solvability, and every reduced completion is a real one. The
+    /// dominance analyses still use the full transitions, which only makes
+    /// frontier and effective-price bounds more conservative, and mirrored
+    /// paths in the simulation bound are converted the same way.
+    pub reduce_leaves: bool,
 }
 
 impl Default for Config {
@@ -254,6 +307,7 @@ impl Default for Config {
             fold_g: true,
             leaves: Leaves::default(),
             max_analysis_states: 256,
+            reduce_leaves: false,
         }
     }
 }
@@ -273,6 +327,14 @@ pub struct Statistics {
     pub dead_ends: u64,
     /// States stored (and pushed on the open list).
     pub stored: u64,
+    /// Leaf simulations computed (one per analysed leaf, if any criterion or
+    /// [`Config::reduce_leaves`] needed them).
+    pub simulated_leaves: u64,
+    /// Leaf transitions removed by [`Config::reduce_leaves`].
+    pub reduced_leaf_transitions: u64,
+    /// Leaf states that [`Config::reduce_leaves`] made unreachable from the
+    /// initial leaf states (under every center).
+    pub unreachable_leaf_states: u64,
 }
 
 /// The result of a search run: the plan, if any, and counters.
@@ -523,18 +585,25 @@ impl Config {
             decoupled = decoupled.into_reachability_only();
         }
 
+        let dominance = Dominance::new(&decoupled, self, order == Order::Greedy);
+        let mut statistics = Statistics::default();
+        if self.reduce_leaves {
+            reduce_leaves(&mut decoupled, &dominance, &mut statistics);
+        }
+
         let mut search = Search {
             task: &decoupled,
             heuristic,
             order,
-            dominance: Dominance::new(&decoupled, self, order == Order::Greedy),
+            dominance,
             nodes: Vec::new(),
             open: BinaryHeap::new(),
             by_center: BTreeMap::new(),
             best: None,
-            statistics: Statistics::default(),
+            statistics,
         };
         search.run();
+        search.statistics.simulated_leaves = search.dominance.simulated_leaves();
 
         let plan = search.best.map(|(cost, id)| {
             let plan = reconstruct::plan(&decoupled, &search.path(id), cost);
@@ -545,6 +614,27 @@ impl Config {
             plan,
             statistics: search.statistics,
         })
+    }
+}
+
+/// Removes the redundant leaf transitions of every leaf with a simulation
+/// (see [`Config::reduce_leaves`]) and counts the effect.
+fn reduce_leaves(task: &mut DecoupledTask, dominance: &Dominance, statistics: &mut Statistics) {
+    let widen = |n: usize| u64::try_from(n).unwrap_or(u64::MAX);
+    for leaf in 0..task.leaves.len() {
+        let Some(rel) = dominance.simulators(leaf) else {
+            continue;
+        };
+
+        let parts: Vec<_> = task
+            .globals
+            .iter()
+            .filter_map(|g| g.parts[leaf].as_ref())
+            .collect();
+        let (disabled, lost) = simulation::redundant_transitions(&task.leaves[leaf], &parts, rel);
+        statistics.reduced_leaf_transitions += widen(disabled.iter().filter(|&&d| d).count());
+        statistics.unreachable_leaf_states += widen(lost);
+        task.leaves[leaf].disabled = disabled;
     }
 }
 
@@ -608,6 +698,16 @@ impl Search<'_> {
     /// solution if it is one.
     fn insert(&mut self, state: DecoupledState, g: Price, parent: Option<(usize, usize)>) {
         self.statistics.generated += 1;
+        let work = self.task.leaves.iter().map(|l| l.size).sum::<usize>() + 1;
+        if self
+            .dominance
+            .record_work(self.task, u64::try_from(work).unwrap_or(u64::MAX))
+        {
+            for node in &mut self.nodes {
+                node.bounds = None;
+            }
+        }
+
         if self.is_dominated(&state, g) {
             self.statistics.dominated += 1;
             return;

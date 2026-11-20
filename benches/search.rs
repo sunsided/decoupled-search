@@ -58,14 +58,19 @@ fn bench_pruning(criterion: &mut Criterion) {
         ("effective", Pruning::EffectivePrices),
         ("simulation", Pruning::Simulation),
         ("effective-simulation", Pruning::EffectiveSimulation),
+        ("adaptive", Pruning::Adaptive),
     ] {
-        let config = Config {
-            pruning,
-            ..Config::default()
-        };
-        criterion.bench_function(&format!("uniform-{name}/fork"), |b| {
-            b.iter(|| config.search(black_box(&task), &factoring));
-        });
+        for reduce_leaves in [false, true] {
+            let config = Config {
+                pruning,
+                reduce_leaves,
+                ..Config::default()
+            };
+            let suffix = if reduce_leaves { "+reduced" } else { "" };
+            criterion.bench_function(&format!("uniform-{name}{suffix}/fork"), |b| {
+                b.iter(|| config.search(black_box(&task), &factoring));
+            });
+        }
     }
 }
 

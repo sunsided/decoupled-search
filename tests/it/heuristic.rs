@@ -1,7 +1,7 @@
 //! Greedy best-first decoupled search with `h^FF` and `h^max`: valid plans,
 //! the same solvability as Dijkstra, and costs no lower than the optimum.
 
-use decoupled_search::{Config, Error, Factoring, HFf, HMax, Leaves, gbfs};
+use decoupled_search::{Config, Error, Factoring, HFf, HMax, Leaves, Pruning, gbfs};
 use sas_plus::Task;
 use sas_plus::random::{RandomTaskParams, random_task};
 
@@ -77,10 +77,15 @@ fn reachability_only_gbfs_matches_dijkstra_solvability() {
         let expected = optimal_cost(&task);
         let ff = HFf::new(&task);
         for factoring in factorings(&task) {
-            for pruning in PRUNINGS {
+            for (pruning, reduce_leaves) in PRUNINGS
+                .map(|p| (p, false))
+                .into_iter()
+                .chain([(Pruning::Basic, true)])
+            {
                 let config = Config {
                     pruning,
                     leaves: Leaves::Reachability,
+                    reduce_leaves,
                     ..Config::default()
                 };
                 let outcome = config.gbfs(&task, &factoring, &ff).expect("supported");

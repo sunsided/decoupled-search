@@ -27,7 +27,8 @@
 //! Pre-release, see `docs/design.md`: fork, inverted-fork, greedy star and
 //! explicit factorings, scored and chosen by [`Factoring::auto`];
 //! uniform-cost, A* and greedy search with basic, frontier,
-//! effective-price and simulation dominance pruning; reachability-only
+//! effective-price, simulation and adaptive dominance pruning and
+//! simulation-based leaf reduction; reachability-only
 //! leaves for greedy search; `h^max` and `h^FF` on decoupled states, and a
 //! merge-and-shrink adapter behind the `merge-and-shrink` feature.
 //! Conditional effects and axioms are supported where the decoupled

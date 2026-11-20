@@ -135,6 +135,69 @@ fn predecessors(transitions: &Transitions, size: usize) -> Vec<Vec<usize>> {
     predecessors
 }
 
+/// The leaf transitions that simulation-based leaf reduction removes, by
+/// `rank * actions + action` (see [`crate::Config::reduce_leaves`] for the
+/// rule and its soundness), and the number of leaf states that become
+/// unreachable from the initial leaf state under every center once they
+/// are gone. `rel` is [`simulators`] of `leaf`, `parts` the leaf parts of
+/// all global actions touching it.
+pub(crate) fn redundant_transitions(
+    leaf: &Leaf,
+    parts: &[&LeafPart],
+    rel: &[Bits],
+) -> (Vec<bool>, usize) {
+    let view = leaf.static_view();
+    let transitions = transitions(&view, parts);
+    let weaker = weaker_actions(leaf);
+    let count = leaf.actions.len();
+    let key = |a: usize| (leaf.actions[a].cost, leaf.actions[a].center_pre.len(), a);
+
+    let mut disabled = vec![false; leaf.size * count];
+    for (x, out) in transitions.leaf.iter().enumerate() {
+        for &(a, nx) in out {
+            let stays = rel[nx].contains(x);
+            let replaced = out
+                .iter()
+                .any(|&(b, ny)| key(b) < key(a) && weaker[a * count + b] && rel[nx].contains(ny));
+            disabled[x * count + a] = stays || replaced;
+        }
+    }
+
+    let before = reachable(&transitions, leaf, &[]);
+    let after = reachable(&transitions, leaf, &disabled);
+    let lost = before
+        .iter()
+        .zip(&after)
+        .filter(|&(&b, &a)| b && !a)
+        .count();
+    (disabled, lost)
+}
+
+/// The leaf states reachable from the initial leaf state over leaf actions
+/// (except `disabled` ones) and global parts, ignoring the center.
+fn reachable(transitions: &Transitions, leaf: &Leaf, disabled: &[bool]) -> Vec<bool> {
+    let mut seen = vec![false; leaf.size];
+    let mut stack = vec![leaf.initial];
+    seen[leaf.initial] = true;
+    while let Some(x) = stack.pop() {
+        let local = transitions.leaf[x]
+            .iter()
+            .filter(|&&(a, _)| {
+                !disabled
+                    .get(x * transitions.actions + a)
+                    .is_some_and(|&d| d)
+            })
+            .map(|&(_, next)| next);
+        for next in local.chain(transitions.global[x].iter().flatten().copied()) {
+            if !core::mem::replace(&mut seen[next], true) {
+                stack.push(next);
+            }
+        }
+    }
+
+    seen
+}
+
 /// The leaf-action and global-part transitions of every leaf state.
 fn transitions(view: &View<'_>, parts: &[&LeafPart]) -> Transitions {
     let leaf = view.leaf;

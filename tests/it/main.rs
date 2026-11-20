@@ -17,24 +17,37 @@ use decoupled_search::{Config, DecoupledHeuristic, Factoring, HMax, Plan, Prunin
 use sas_plus::Task;
 
 /// Every dominance criterion.
-const PRUNINGS: [Pruning; 5] = [
+const PRUNINGS: [Pruning; 6] = [
     Pruning::Basic,
     Pruning::Frontier,
     Pruning::EffectivePrices,
     Pruning::Simulation,
     Pruning::EffectiveSimulation,
+    Pruning::Adaptive,
 ];
 
 /// Every configuration of the cost-optimal searches: each dominance
-/// criterion, with and without the shared `g` budget.
+/// criterion with and without the shared `g` budget, and leaf reduction
+/// under three of them.
 fn optimal_configs() -> impl Iterator<Item = Config> {
-    PRUNINGS.into_iter().flat_map(|pruning| {
+    let plain = PRUNINGS.into_iter().flat_map(|pruning| {
         [true, false].map(|fold_g| Config {
             pruning,
             fold_g,
             ..Config::default()
         })
-    })
+    });
+    let reduced = [
+        Pruning::Basic,
+        Pruning::EffectiveSimulation,
+        Pruning::Adaptive,
+    ]
+    .map(|pruning| Config {
+        pruning,
+        reduce_leaves: true,
+        ..Config::default()
+    });
+    plain.chain(reduced)
 }
 
 /// Searches `task` under `factoring` with uniform-cost search and A* with

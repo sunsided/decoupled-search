@@ -271,6 +271,7 @@ fn compile_leaf(
         derived,
         goal: Vec::new(),
         actions: Vec::new(),
+        disabled: Vec::new(),
     })
 }
 

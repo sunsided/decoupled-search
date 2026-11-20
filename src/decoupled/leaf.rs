@@ -109,6 +109,10 @@ pub(crate) struct Leaf {
     pub(crate) goal: Vec<LeafFact>,
     /// All leaf actions of this leaf.
     pub(crate) actions: Vec<LeafAction>,
+    /// Leaf transitions removed by simulation-based leaf reduction, by
+    /// `rank * actions.len() + action`; empty if none are. Leaf closure
+    /// skips them.
+    pub(crate) disabled: Vec<bool>,
 }
 
 impl Leaf {
@@ -283,12 +287,20 @@ impl View<'_> {
     /// with zero-cost actions. Without `costs`, every action counts as free,
     /// so only reachability is recorded.
     pub(crate) fn close(&self, prices: &mut [Price], costs: bool) -> Vec<Step> {
-        let actions: Vec<&LeafAction> = self
+        let count = self.leaf.actions.len();
+        let actions: Vec<(usize, &LeafAction)> = self
             .leaf
             .actions
             .iter()
-            .filter(|a| self.center_holds(&a.center_pre))
+            .enumerate()
+            .filter(|(_, a)| self.center_holds(&a.center_pre))
             .collect();
+        let disabled = |rank: usize, index: usize| {
+            self.leaf
+                .disabled
+                .get(rank * count + index)
+                .is_some_and(|&d| d)
+        };
         let mut steps = vec![None; self.leaf.size];
         let mut open: BinaryHeap<Reverse<(Price, usize)>> = prices
             .iter()
@@ -302,7 +314,10 @@ impl View<'_> {
                 continue;
             }
 
-            for action in actions.iter().filter(|a| self.satisfies(rank, &a.part.pre)) {
+            for &(_, action) in actions
+                .iter()
+                .filter(|&&(i, a)| !disabled(rank, i) && self.satisfies(rank, &a.part.pre))
+            {
                 let target = self.apply(rank, &action.part.eff);
                 let cost = if costs { action.cost } else { 0 };
                 let reached = price.saturating_add(cost);
