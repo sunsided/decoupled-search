@@ -180,6 +180,24 @@ impl Factoring {
         }
     }
 
+    /// `task` with every operator that is a leaf action under this
+    /// factoring at cost 0: the task whose heuristics are root heuristics
+    /// for [`crate::Config::anytime_astar`] (Gnad and Hoffmann's
+    /// leaves-for-free root estimate, ICAPS 2015, Definition 6).
+    ///
+    /// # Errors
+    ///
+    /// As [`Factoring::score`].
+    pub fn with_free_leaf_actions(&self, task: &Task) -> Result<Task, Error> {
+        let decoupled = DecoupledTask::new(task, self)?;
+        let mut free = task.clone();
+        for action in decoupled.leaves.iter().flat_map(|l| &l.actions) {
+            free.operators[action.op].cost = 0;
+        }
+
+        Ok(free)
+    }
+
     /// Scores this factoring on `task`, classifying operators exactly as
     /// the search does.
     ///

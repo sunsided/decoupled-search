@@ -40,6 +40,10 @@ enum Order {
     Cost,
     /// By `h` alone, stopping at the first solution.
     Greedy,
+    /// Anytime decoupled A*: by `g` plus a root heuristic (remaining global
+    /// cost only), pruning by `g + h` against the best solution, stopping
+    /// once the popped key plus the least possible goal price reaches it.
+    Anytime,
 }
 
 /// The dominance criterion that prunes generated decoupled states.
@@ -349,6 +353,9 @@ pub struct Statistics {
     pub simulated_leaves: u64,
     /// Leaf transitions removed by [`Config::reduce_leaves`].
     pub reduced_leaf_transitions: u64,
+    /// Generated states pruned by anytime A* ([`Config::anytime_astar`])
+    /// because `g` plus the fork heuristic reaches the best solution cost.
+    pub bound_pruned: u64,
     /// Leaf states that [`Config::reduce_leaves`] made unreachable from the
     /// initial leaf states (under every center).
     pub unreachable_leaf_states: u64,
@@ -384,7 +391,15 @@ struct Search<'t> {
     /// The task being searched.
     task: &'t DecoupledTask,
     /// The heuristic; `None` means `h = 0` without computing fact prices.
+    /// Under [`Order::Anytime`], the fork heuristic that prunes against the
+    /// best solution.
     heuristic: Option<&'t dyn DecoupledHeuristic>,
+    /// The root heuristic of [`Order::Anytime`], evaluated with every
+    /// reached fact at price 0; `None` otherwise.
+    root: Option<&'t dyn DecoupledHeuristic>,
+    /// A lower bound on the goal price of every decoupled goal state (see
+    /// [`min_goal_price`]); 0 unless [`Order::Anytime`].
+    min_goal_price: Price,
     /// The open-list order.
     order: Order,
     /// The dominance criterion.
@@ -517,7 +532,7 @@ impl Config {
     /// As [`search()`], and [`Error::ReachabilityNotOptimal`] with
     /// [`Leaves::Reachability`].
     pub fn search(&self, task: &Task, factoring: &Factoring) -> Result<Outcome, Error> {
-        self.run(task, factoring, None, Order::Cost)
+        self.run(task, factoring, (None, None), Order::Cost)
     }
 
     /// Decoupled A* with this configuration; see [`astar`].
@@ -531,7 +546,7 @@ impl Config {
         factoring: &Factoring,
         heuristic: &(impl DecoupledHeuristic + ?Sized),
     ) -> Result<Outcome, Error> {
-        self.run(task, factoring, Some(&heuristic), Order::Cost)
+        self.run(task, factoring, (Some(&heuristic), None), Order::Cost)
     }
 
     /// Decoupled greedy best-first search with this configuration; see
@@ -578,7 +593,79 @@ impl Config {
         factoring: &Factoring,
         heuristic: &(impl DecoupledHeuristic + ?Sized),
     ) -> Result<Outcome, Error> {
-        self.run(task, factoring, Some(&heuristic), Order::Greedy)
+        self.run(task, factoring, (Some(&heuristic), None), Order::Greedy)
+    }
+
+    /// Anytime decoupled A* (Gnad and Hoffmann's Anytime Fork-Root A*,
+    /// ICAPS 2015, generalised to star factorings): A* ordered by `g` plus
+    /// the `root` heuristic, which estimates only the cost of the remaining
+    /// global actions, with `fork` (an estimate of the whole remaining cost,
+    /// as for [`Config::astar`]) used to prune nodes that cannot beat the
+    /// best solution found so far.
+    ///
+    /// The root heuristic sees every reached leaf fact at price 0. Build it
+    /// on [`Factoring::with_free_leaf_actions`], for example
+    /// `HMax::new(&factoring.with_free_leaf_actions(&task)?)`: any
+    /// completion of a member state is then a plan of that task costing
+    /// only its global actions, so `h^max` there is root-admissible.
+    ///
+    /// The search records solutions when they are generated and stops once
+    /// the popped key plus the least goal price any decoupled goal state can
+    /// have (per leaf, the cheapest leaf-action cost from the initial leaf
+    /// state to a goal leaf state, global parts free, ignoring the center)
+    /// reaches the best solution cost, or when the open list is empty. This
+    /// subsumes the paper's early termination (an expanded goal whose goal
+    /// price equals that minimum) and is sound by the same argument as
+    /// [`Config::astar`]: while the optimum `C*` is not recorded, a node
+    /// covering it is open, with key at most `C*` minus its goal price.
+    /// Nodes with `g + fork` at least the best cost are pruned
+    /// ([`Statistics::bound_pruned`]), which cannot cut below `C*`.
+    ///
+    /// The plan is cost-optimal if `root` is root-admissible and `fork` is
+    /// admissible.
+    ///
+    /// # Errors
+    ///
+    /// As [`Config::search`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use decoupled_search::{Config, Factoring, HMax};
+    /// use sas_plus::{Effect, Fact, Operator, State, Task, Variable};
+    ///
+    /// let op = |pre: Vec<Fact>, eff: Fact| Operator {
+    ///     name: "op".into(),
+    ///     pre,
+    ///     eff: vec![Effect::new(eff)],
+    ///     cost: 1,
+    /// };
+    /// let task = Task {
+    ///     variables: vec![Variable::new("truck", 2), Variable::new("pkg", 3)],
+    ///     operators: vec![
+    ///         op(vec![Fact::new(0, 0)], Fact::new(0, 1)),
+    ///         op(vec![Fact::new(0, 0), Fact::new(1, 0)], Fact::new(1, 2)),
+    ///         op(vec![Fact::new(0, 1), Fact::new(1, 2)], Fact::new(1, 1)),
+    ///     ],
+    ///     initial: State(vec![0, 0]),
+    ///     goal: vec![Fact::new(1, 1)],
+    ///     axioms: vec![],
+    /// };
+    ///
+    /// let factoring = Factoring::fork(&task);
+    /// let root = HMax::new(&factoring.with_free_leaf_actions(&task)?);
+    /// let outcome = Config::default().anytime_astar(&task, &factoring, &root, &HMax::new(&task))?;
+    /// assert_eq!(outcome.plan.map(|p| p.cost), Some(3));
+    /// # Ok::<(), decoupled_search::Error>(())
+    /// ```
+    pub fn anytime_astar(
+        &self,
+        task: &Task,
+        factoring: &Factoring,
+        root: &(impl DecoupledHeuristic + ?Sized),
+        fork: &(impl DecoupledHeuristic + ?Sized),
+    ) -> Result<Outcome, Error> {
+        self.run(task, factoring, (Some(&fork), Some(&root)), Order::Anytime)
     }
 
     /// The search driver shared by all entry points.
@@ -590,7 +677,10 @@ impl Config {
         &self,
         task: &Task,
         factoring: &Factoring,
-        heuristic: Option<&dyn DecoupledHeuristic>,
+        (heuristic, root): (
+            Option<&dyn DecoupledHeuristic>,
+            Option<&dyn DecoupledHeuristic>,
+        ),
         order: Order,
     ) -> Result<Outcome, Error> {
         let mut decoupled = DecoupledTask::new(task, factoring)?;
@@ -608,9 +698,16 @@ impl Config {
             reduce_leaves(&mut decoupled, &dominance, &mut statistics);
         }
 
+        let min_goal_price = if order == Order::Anytime {
+            min_goal_price(&decoupled)
+        } else {
+            0
+        };
         let mut search = Search {
             task: &decoupled,
             heuristic,
+            root,
+            min_goal_price,
             order,
             dominance,
             nodes: Vec::new(),
@@ -735,6 +832,30 @@ impl Config {
     }
 }
 
+/// A lower bound on the goal price of every decoupled goal state of `task`:
+/// per leaf, the cheapest leaf-action cost from the initial leaf state to a
+/// goal leaf state, global parts free, ignoring the center (0 for leaves
+/// whose transitions read the center); [`Price::MAX`] if some leaf can
+/// never reach its goal.
+fn min_goal_price(task: &DecoupledTask) -> Price {
+    task.leaves
+        .iter()
+        .enumerate()
+        .map(|(index, leaf)| {
+            let parts: Vec<_> = task
+                .globals
+                .iter()
+                .filter_map(|g| g.parts[index].as_ref())
+                .collect();
+            if leaf.reads_center(parts.iter().copied()) {
+                return 0;
+            }
+
+            simulation::cheapest_goal(leaf, &parts).unwrap_or(Price::MAX)
+        })
+        .fold(0, Price::saturating_add)
+}
+
 /// Removes the redundant leaf transitions of every leaf with a simulation
 /// (see [`Config::reduce_leaves`]) and counts the effect.
 fn reduce_leaves(task: &mut DecoupledTask, dominance: &Dominance, statistics: &mut Statistics) {
@@ -800,6 +921,9 @@ impl Search<'_> {
     fn is_done(&self, key: Price) -> bool {
         match self.order {
             Order::Cost => self.best.is_some_and(|(cost, _)| key >= cost),
+            Order::Anytime => self
+                .best
+                .is_some_and(|(cost, _)| key.saturating_add(self.min_goal_price) >= cost),
             Order::Greedy => self.best.is_some(),
         }
     }
@@ -809,6 +933,22 @@ impl Search<'_> {
     fn estimate(&self, state: &DecoupledState) -> Option<Price> {
         self.heuristic
             .map_or(Some(0), |h| h.estimate(&self.task.fact_prices(state)))
+    }
+
+    /// The open-list key of `state` reached at `g` with heuristic value `h`;
+    /// `None` if the root heuristic of [`Order::Anytime`] declares it a dead
+    /// end.
+    fn key(&self, state: &DecoupledState, g: Price, h: Price) -> Option<Price> {
+        match self.order {
+            Order::Cost => Some(g.saturating_add(h)),
+            Order::Greedy => Some(h),
+            Order::Anytime => {
+                let root = self.root.map_or(Some(0), |r| {
+                    r.estimate(&self.task.fact_prices(state).reached_for_free())
+                })?;
+                Some(g.saturating_add(root))
+            }
+        }
     }
 
     /// Adds `state` reached at cost `g` unless a stored node dominates it or
@@ -836,6 +976,20 @@ impl Search<'_> {
             return;
         };
 
+        let Some(key) = self.key(&state, g, h) else {
+            self.statistics.dead_ends += 1;
+            return;
+        };
+
+        if self.order == Order::Anytime
+            && self
+                .best
+                .is_some_and(|(best, _)| g.saturating_add(h) >= best)
+        {
+            self.statistics.bound_pruned += 1;
+            return;
+        }
+
         let id = self.nodes.len();
         if let Some(rest) = self.task.goal_price(&state) {
             let cost = g.saturating_add(rest);
@@ -848,10 +1002,6 @@ impl Search<'_> {
             .entry(state.center.clone())
             .or_default()
             .push(id);
-        let key = match self.order {
-            Order::Cost => g.saturating_add(h),
-            Order::Greedy => h,
-        };
         self.open.push(Reverse((key, id)));
         self.nodes.push(Node {
             state,

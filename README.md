@@ -16,7 +16,8 @@ Pre-release. The API will change. Implemented (see
 - Leaf reachability with prices (cheapest cost per leaf state along the
   center path); stored states keep only reached leaf states, as `u16` ranks
   with `u64` prices (no prices at all when all are 0).
-- Uniform-cost search and A* (cost-optimal), and GBFS (satisficing), with
+- Uniform-cost search, A* and anytime A* (Gnad and Hoffmann's Anytime
+  Fork-Root A*, cost-optimal), and GBFS (satisficing), with
   `Config` choosing the dominance criterion: basic, frontier, effective
   prices, leaf simulation, or effective prices over simulation (Torralba,
   Gnad, Dubbert and Hoffmann 2016, generalised to global actions that touch
@@ -24,7 +25,8 @@ Pre-release. The API will change. Implemented (see
   default switches to simulation only once the search has spent its cost.
   Optional simulation-based leaf reduction (`Config::reduce_leaves`, the
   superfluous-transition rule of the paper's technical report with a
-  removal order that keeps it sound).
+  removal order that keeps it sound), and `Config::reduced_task` without
+  the operators it makes useless, for heuristics.
   Search statistics come with every `Outcome`.
 - Reachability-only leaves (no prices) for GBFS.
 - Conditional effects on a leaf conditioned on the center and that leaf,

@@ -13,7 +13,7 @@ mod random;
 mod star;
 mod unsolvable;
 
-use decoupled_search::{Config, DecoupledHeuristic, Factoring, HMax, Plan, Pruning};
+use decoupled_search::{Config, DecoupledHeuristic, FactPrices, Factoring, HMax, Plan, Pruning};
 use sas_plus::Task;
 
 /// Every dominance criterion.
@@ -58,19 +58,34 @@ fn checked_cost(task: &Task, factoring: &Factoring) -> Option<u64> {
     checked_cost_with(task, factoring, &[&HMax::new(task)])
 }
 
-/// [`checked_cost`] with A* runs for each of `heuristics` instead of `h^max`.
+/// [`checked_cost`] with A* runs for each of `heuristics` instead of `h^max`,
+/// and anytime A* runs with each of them as the fork heuristic, under a
+/// blind root heuristic and `h^max` of the task with free leaf actions.
 fn checked_cost_with(
     task: &Task,
     factoring: &Factoring,
     heuristics: &[&dyn DecoupledHeuristic],
 ) -> Option<u64> {
+    let free = factoring
+        .with_free_leaf_actions(task)
+        .expect("supported task");
+    let root = HMax::new(&free);
+    let roots: [&dyn DecoupledHeuristic; 2] = [&Blind, &root];
     let mut costs = optimal_configs().flat_map(|config| {
         let uniform = config.search(task, factoring).expect("supported task");
         let informed = heuristics
             .iter()
             .map(move |h| config.astar(task, factoring, h).expect("supported task"));
+        let anytime = heuristics.iter().flat_map(move |h| {
+            roots.into_iter().map(move |r| {
+                config
+                    .anytime_astar(task, factoring, r, h)
+                    .expect("supported task")
+            })
+        });
         core::iter::once(uniform)
             .chain(informed)
+            .chain(anytime)
             .map(move |outcome| (config, validated(task, outcome.plan)))
     });
     let (_, first) = costs.next().expect("at least one configuration");
@@ -79,6 +94,16 @@ fn checked_cost_with(
     }
 
     first
+}
+
+/// The heuristic that is 0 everywhere: blind search, and a trivially
+/// root-admissible root heuristic for anytime A*.
+struct Blind;
+
+impl DecoupledHeuristic for Blind {
+    fn estimate(&self, _: &FactPrices<'_>) -> Option<u64> {
+        Some(0)
+    }
 }
 
 /// The cost of `plan` after checking it with [`Plan::validate`]; `None` if

@@ -27,7 +27,7 @@
 //! Pre-release, see `docs/design.md`: fork, inverted-fork, X-shape, incident-arcs
 //! and independent-set star factorings (Gnad, Poser and Hoffmann, IJCAI
 //! 2017) and explicit ones, scored and chosen by [`Factoring::auto`];
-//! uniform-cost, A* and greedy search with basic, frontier,
+//! uniform-cost, A*, anytime A* and greedy search with basic, frontier,
 //! effective-price, simulation and adaptive dominance pruning and
 //! simulation-based leaf reduction; reachability-only
 //! leaves for greedy search; `h^max` and `h^FF` on decoupled states, and a

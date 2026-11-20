@@ -55,6 +55,20 @@ pub struct FactPrices<'a> {
     pub(crate) prices: Vec<u64>,
 }
 
+impl FactPrices<'_> {
+    /// The same facts with every price set to 0: what a root heuristic of
+    /// anytime A* sees, since it estimates only the remaining global cost.
+    pub(crate) fn reached_for_free(mut self) -> Self {
+        for price in &mut self.prices {
+            if *price != u64::MAX {
+                *price = 0;
+            }
+        }
+
+        self
+    }
+}
+
 impl FactPrices<'static> {
     /// Fact prices for `task` under `factoring`, with `price(fact)` as the
     /// price of every fact (`None` for facts no member state contains).

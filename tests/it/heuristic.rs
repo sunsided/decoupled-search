@@ -122,3 +122,35 @@ fn reachability_only_leaves_need_greedy_search() {
         Err(Error::ReachabilityNotOptimal)
     );
 }
+
+/// Anytime A* is not vacuous: on star tasks under the automatic
+/// factorings, its upper-bound pruning fires and it expands no more than
+/// it would by exhausting the open list (its stopping rule fires too).
+/// Costs are cross-checked against Dijkstra in `checked_cost`.
+#[test]
+fn anytime_astar_prunes_and_stops_early() {
+    let (mut pruned, mut stopped) = (0, 0);
+    for seed in 0..SEEDS {
+        let task = random_star_task(seed);
+        let fork = HMax::new(&task);
+        for (_, factoring) in strategies(&task) {
+            let root = HMax::new(&factoring.with_free_leaf_actions(&task).expect("supported"));
+            let outcome = Config::default()
+                .anytime_astar(&task, &factoring, &root, &fork)
+                .expect("supported");
+            assert_eq!(
+                validated(&task, outcome.plan),
+                optimal_cost(&task),
+                "seed {seed}"
+            );
+            let stats = outcome.statistics;
+            pruned += stats.bound_pruned;
+            stopped += u64::from(stats.expanded < stats.stored);
+        }
+    }
+
+    assert!(
+        pruned > 0 && stopped > 0,
+        "{pruned} pruned, {stopped} stopped early"
+    );
+}

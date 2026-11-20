@@ -33,7 +33,10 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::decoupled::{Leaf, LeafPart, View};
+use alloc::collections::BinaryHeap;
+use core::cmp::Reverse;
+
+use crate::decoupled::{Leaf, LeafPart, Price, View};
 
 /// A set of leaf states as a bit vector.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -199,6 +202,48 @@ pub(crate) fn live_actions(leaf: &Leaf, parts: &[&LeafPart]) -> Vec<bool> {
     }
 
     live
+}
+
+/// The cheapest cost of leaf actions from the initial leaf state of `leaf`
+/// to a leaf state satisfying its goal, with global parts at cost 0 and
+/// center preconditions ignored; `None` if no goal state is reachable.
+/// Skips the transitions [`Leaf::disabled`] removes. Only meaningful for
+/// leaves whose transitions do not read the center.
+pub(crate) fn cheapest_goal(leaf: &Leaf, parts: &[&LeafPart]) -> Option<Price> {
+    let view = leaf.static_view();
+    let transitions = transitions(&view, parts);
+    let count = leaf.actions.len();
+    let mut distance = vec![Price::MAX; leaf.size];
+    let mut open = BinaryHeap::new();
+    distance[leaf.initial] = 0;
+    open.push(Reverse((0, leaf.initial)));
+    while let Some(Reverse((d, x))) = open.pop() {
+        if d > distance[x] {
+            continue;
+        }
+
+        if view.is_goal(x) {
+            return Some(d);
+        }
+
+        let kept = transitions.leaf[x]
+            .iter()
+            .filter(|&&(a, _)| !leaf.disabled.get(x * count + a).is_some_and(|&off| off))
+            .map(|&(a, next)| (next, leaf.actions[a].cost));
+        let global = transitions.global[x]
+            .iter()
+            .flatten()
+            .map(|&next| (next, 0));
+        for (next, cost) in kept.chain(global) {
+            let through = d.saturating_add(cost);
+            if through < distance[next] {
+                distance[next] = through;
+                open.push(Reverse((through, next)));
+            }
+        }
+    }
+
+    None
 }
 
 /// The leaf states reachable from the initial leaf state over leaf actions

@@ -166,6 +166,19 @@ key is at least the best solution cost (leaf prices are non-negative and
 `h` is a lower bound). `gbfs` orders by `h` alone and returns the first
 solution generated.
 
+`Config::anytime_astar` is Gnad and Hoffmann's Anytime Fork-Root A\*
+(ICAPS 2015, Figure 4), generalised to star factorings:
+
+| Paper | Paper rule | Our code | Status |
+| --- | --- | --- | --- |
+| Fig. 4 | A\* ordered by a root heuristic `h^R` (remaining center cost) | key `g + root`, where `root` sees every reached fact at price 0 | matches |
+| Def. 6 | leaves-for-free root estimate: `h` on the task with leaf-action costs 0 | `Factoring::with_free_leaf_actions`, for example under `HMax` | matches |
+| Fig. 4 | discard generated `N` with `g + h^F >= U` | same, counted in `Statistics::bound_pruned` | matches |
+| Fig. 4 | goals checked on expansion; `U` updated; stop at an expanded goal with goal price `MINGprice`, else exhaust the open list | goals recorded on generation; stop once popped key + `MINGprice >= U` | deliberate: subsumes the paper's early termination (its goal has key `g`, so `U <= key + MINGprice`) and is sound by the A\* covering argument |
+| Fig. 4 | `MINGprice`: sum over leaves of the optimal cost of the projection onto the leaf | per leaf the cheapest leaf-action cost from the initial to a goal leaf state, global parts free, center ignored, reduced transitions skipped; 0 for leaves whose transitions read the center | generalisation (global actions move leaves at no price), a lower bound on every goal price |
+| Thm. 5 | optimal for root-admissible `h^R` and fork-admissible `h^F` | same; checked against Dijkstra with a blind root and `h^max` on the free-leaf task in every optimal configuration | matches |
+| Fig. 4 | Fork-Root A\* (FRA\*, not complete) | not implemented | not needed: anytime A\* is complete |
+
 ## Dominance pruning
 
 Prices can grow without bound along center cycles: a center loop that forces
@@ -301,7 +314,7 @@ both; the proofs and the leaf reduction are in the report only):
 | Sec. 3 | prune `s` if a seen `t` has `s ⪯ t` and `g(s) >= g(t)`; dominance also requires `d*(s) >= d*(t)` for 0-cost actions | `fold_g = false`: `g(t) <= g(n)` and every bound at most the price; `fold_g = true` (default): one budget `g(t) + Σ_L δ_L <= g(n)` | deliberate extension (subsumes the paper's rule); no `d*` condition, because every criterion maps a completion to one with the same remaining global actions, see *Optimality of A\** |
 | Sec. 3 | fork factorings, one goal leaf state, center actions do not touch leaves | star factorings with global actions on leaves, partial leaf goals; leaves with center-dependent transitions or more than `max_analysis_states` states use Def. 1 | deliberate generalisation, proofs on `Pruning` |
 | Sec. 6 (report) | superfluous transitions, then unreachable leaf states, then actions without transitions | rule 2 with the removal order above; states stay but are never reached; `Config::reduced_task` drops the actions for heuristics | bug in the literal rule avoided; ours strengthened to match one-at-a-time removal (before, equal-cost and equal-precondition replacements were kept whenever the replacing action had the larger index; regression test `one_directional_replacement_removes_the_dominated_transition`) |
-| Sec. 8 | DA\* and anytime ADA\* | A\* that stops once the popped key reaches the best solution cost recorded at generation; no ADA\* | ADA\* not implemented |
+| Sec. 8 | DA\* and anytime ADA\* | `astar` (DA\*, stopping once the popped key reaches the best solution cost recorded at generation) and `anytime_astar` (ADA\*, see *Goal test and search*) | matches |
 
 ## Reachability-only leaves
 
@@ -372,8 +385,17 @@ for heuristic tests.
   `Factor`, `MergeStrategy` and `ShrinkStrategy` (label reduction is not
   public and is skipped).
 
-How Gnad and Hoffmann (2015) fold leaf prices into `h^max` is not checked
-against the paper. LM-cut remains open.
+Gnad and Hoffmann (2015, Definition 5) fold leaf prices in by a task
+`Π^L$` whose leaf variables start unknown and with one new action per
+reached leaf state, setting that state at its price (once per leaf). In
+the delete relaxation the once-per-leaf flag never blocks, so `h^max` on
+`Π^L$` gives each leaf fact the cheapest price of a reached leaf state
+containing it, which is exactly our seed: `HMax` matches their
+`h^max_{L$}` (checked against the paper). `HFf` uses the same seeds and
+adds the largest seed price its relaxed plan starts from, our own choice
+rather than `h^FF` on `Π^L$`; it is not admissible either way. Their root estimate
+(Definition 6) is `Factoring::with_free_leaf_actions`. LM-cut remains
+open.
 
 ## Conditional effects and axioms
 
@@ -478,10 +500,9 @@ Done since: simulation-based leaf reduction and the adaptive default;
 the factoring strategies, the leaf reduction and the dominance criteria
 checked against the papers (tables above), with the incident-arcs and
 independent-set strategies of Gnad, Poser and Hoffmann (2017).
-Open: sample-search ranking in `Factoring::auto`,
-anytime decoupled A\* (ADA\*), LM-cut, an index for the dominance store,
-decoupled symbolic search, decoupled partial-order reduction (strong stubborn sets), and multiple
-centers.
+Open: LM-cut, an index for the dominance store, decoupled symbolic
+search, decoupled partial-order reduction (strong stubborn sets), and
+multiple centers.
 
 ## Cross-crate needs
 
@@ -506,7 +527,8 @@ centers.
 ## References
 
 - Daniel Gnad and Jörg Hoffmann. *Beating LM-Cut with h^max (Sometimes):
-  Fork-Decoupled State Space Search.* ICAPS 2015, pp. 88–96.
+  Fork-Decoupled State Space Search.* ICAPS 2015, pp. 88–96 (Anytime
+  Fork-Root A\*, Figure 4).
 - Daniel Gnad and Jörg Hoffmann. *Star-Topology Decoupled State Space
   Search.* Artificial Intelligence 257 (2018), pp. 24–60.
   doi:10.1016/j.artint.2017.12.004.
