@@ -69,11 +69,28 @@ fn bench_pruning(criterion: &mut Criterion) {
     }
 }
 
+/// Times A* with an exact merge-and-shrink heuristic under the fork
+/// factoring; building the abstraction is not timed.
+#[cfg(feature = "merge-and-shrink")]
+fn bench_merge_and_shrink(criterion: &mut Criterion) {
+    use decoupled_search::MasHeuristic;
+    use merge_and_shrink::{Bisimulation, MergeAndShrink, SccDfp};
+
+    let task = gripper();
+    let factoring = Factoring::fork(&task);
+    let h = MasHeuristic::build(&task, MergeAndShrink::new(SccDfp::new(&task), Bisimulation));
+    criterion.bench_function("astar-mas/fork", |b| {
+        b.iter(|| astar(black_box(&task), &factoring, &h));
+    });
+}
+
 /// Runs every benchmark in this file with criterion's command-line flags.
 fn main() {
     let mut criterion = Criterion::default().configure_from_args();
 
     bench_search(&mut criterion);
     bench_pruning(&mut criterion);
+    #[cfg(feature = "merge-and-shrink")]
+    bench_merge_and_shrink(&mut criterion);
     criterion.final_summary();
 }

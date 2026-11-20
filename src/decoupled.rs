@@ -265,6 +265,46 @@ impl DecoupledTask {
     }
 }
 
+#[cfg(test)]
+impl DecoupledTask {
+    /// Every member state of `state` with its price (the sum of its leaf
+    /// states' prices), derived variables evaluated. Exponential in the
+    /// number of leaves; for tests on tiny tasks.
+    pub(crate) fn member_states(
+        &self,
+        task: &Task,
+        state: &DecoupledState,
+    ) -> Vec<(sas_plus::State, Price)> {
+        let mut members: Vec<(sas_plus::State, Price)> = vec![(task.initial.clone(), 0)];
+        for (slot, &var) in self.center_vars.iter().enumerate() {
+            members[0].0.0[var] = state.center[slot];
+        }
+
+        for (leaf, prices) in self.leaves.iter().zip(&state.prices) {
+            members = members
+                .into_iter()
+                .flat_map(|(member, price)| {
+                    prices.iter().map(move |(rank, p)| {
+                        let mut member = member.clone();
+                        for (slot, &var) in leaf.vars.iter().enumerate() {
+                            let value = leaf.var_value(rank, slot);
+                            member.0[var] = u32::try_from(value).expect("values fit u32");
+                        }
+
+                        (member, price.saturating_add(p))
+                    })
+                })
+                .collect();
+        }
+
+        for (member, _) in &mut members {
+            task.evaluate_axioms(member);
+        }
+
+        members
+    }
+}
+
 /// Whether all `facts` (with `var` as center slot) hold in `center`.
 fn holds(facts: &[Fact], center: &[Value]) -> bool {
     facts.iter().all(|f| center[f.var] == f.value)

@@ -16,6 +16,8 @@
 //!     relaxed --> hff[HFf: relaxed plan cost]
 //! ```
 
+#[cfg(feature = "merge-and-shrink")]
+mod mas;
 mod relaxed;
 
 use alloc::borrow::Cow;
@@ -25,6 +27,8 @@ use alloc::vec::Vec;
 use sas_plus::{Fact, State, Task, VarId};
 
 use crate::{Error, Factoring};
+#[cfg(feature = "merge-and-shrink")]
+pub use mas::MasHeuristic;
 use relaxed::Relaxation;
 
 /// The cheapest price at which each fact holds in some member state of a
@@ -312,5 +316,147 @@ impl HFf {
 impl DecoupledHeuristic for HFf {
     fn estimate(&self, facts: &FactPrices<'_>) -> Option<u64> {
         self.0.h_ff(facts)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::collections::VecDeque;
+    use alloc::vec;
+    use alloc::vec::Vec;
+
+    use sas_plus::random::{RandomTaskParams, random_task};
+
+    use super::*;
+    use crate::decoupled::DecoupledTask;
+
+    /// Checks on up to 40 decoupled states of `task` under `factoring`
+    /// (breadth-first from the initial state) that `heuristic` never
+    /// exceeds the cheapest completion through a member state, and declares
+    /// dead ends only where no member state can reach the goal. Returns the
+    /// number of states with a finite estimate above 0.
+    fn check_admissible(
+        task: &Task,
+        factoring: &Factoring,
+        heuristic: &dyn DecoupledHeuristic,
+    ) -> u64 {
+        let decoupled = DecoupledTask::new(task, factoring).expect("supported");
+        let perfect = task.perfect_heuristic();
+        let mut informative = 0;
+        let mut queue = VecDeque::from([decoupled.initial()]);
+        let mut seen = Vec::new();
+        while let Some(state) = queue.pop_front() {
+            if seen.len() >= 40 || seen.contains(&state) {
+                continue;
+            }
+
+            let truth = decoupled
+                .member_states(task, &state)
+                .iter()
+                .filter_map(|(member, price)| perfect(member).map(|h| h + price))
+                .min();
+            let estimate = heuristic.estimate(&decoupled.fact_prices(&state));
+            match (estimate, truth) {
+                (None, None) => {}
+                (None, Some(t)) => panic!("dead end declared, but {t} is reachable"),
+                (Some(h), None) => assert!(h < u64::MAX),
+                (Some(h), Some(t)) => assert!(h <= t, "{h} > {t} on {state:?}"),
+            }
+
+            informative += u64::from(estimate.is_some_and(|h| h > 0));
+            queue.extend(decoupled.successors(&state).into_iter().map(|(_, s)| s));
+            seen.push(state);
+        }
+
+        informative
+    }
+
+    /// The factorings to check on `task`: fork, single-variable leaves and
+    /// pairs of state variables.
+    fn factorings(task: &Task) -> Vec<Factoring> {
+        let vars: Vec<usize> = (0..task.num_variables())
+            .filter(|&v| !task.variables[v].is_derived())
+            .collect();
+        let singles = vars.iter().map(|&v| vec![v]).collect();
+        let pairs = vars.chunks(2).map(<[usize]>::to_vec).collect();
+        [singles, pairs]
+            .into_iter()
+            .filter_map(|leaves| Factoring::new(task, leaves).ok())
+            .chain([Factoring::fork(task)])
+            .collect()
+    }
+
+    /// Random tasks, with derived variables in half of them.
+    fn tasks() -> impl Iterator<Item = Task> {
+        (0..60).map(|seed| {
+            let params = RandomTaskParams {
+                num_derived: usize::from(seed % 2 == 0),
+                ..RandomTaskParams::default()
+            };
+            random_task(seed, params)
+        })
+    }
+
+    /// `h^max` on fact prices is admissible on decoupled states.
+    #[test]
+    fn h_max_is_admissible_on_member_states() {
+        let mut informative = 0;
+        for task in tasks() {
+            let h = HMax::new(&task);
+            for factoring in factorings(&task) {
+                if DecoupledTask::new(&task, &factoring).is_ok() {
+                    informative += check_admissible(&task, &factoring, &h);
+                }
+            }
+        }
+
+        assert!(
+            informative > 100,
+            "only {informative} informative estimates"
+        );
+    }
+
+    /// The merge-and-shrink adapter is admissible on decoupled states, with
+    /// exact bisimulation, a lossy size limit, and no shrinking at all.
+    #[cfg(feature = "merge-and-shrink")]
+    #[test]
+    fn merge_and_shrink_is_admissible_on_member_states() {
+        use merge_and_shrink::{Bisimulation, LinearMerge, MergeAndShrink, NoShrink};
+
+        let mut informative = 0;
+        for task in tasks() {
+            let linear = || LinearMerge::in_variable_order(task.num_variables());
+            let heuristics = [
+                MasHeuristic::build(&task, MergeAndShrink::new(linear(), Bisimulation)),
+                MasHeuristic::build(
+                    &task,
+                    MergeAndShrink {
+                        max_states: 4,
+                        ..MergeAndShrink::new(linear(), Bisimulation)
+                    },
+                ),
+                MasHeuristic::build(
+                    &task,
+                    MergeAndShrink {
+                        prune: false,
+                        ..MergeAndShrink::new(linear(), NoShrink)
+                    },
+                ),
+            ];
+            for factoring in factorings(&task) {
+                if DecoupledTask::new(&task, &factoring).is_err() {
+                    continue;
+                }
+
+                for h in &heuristics {
+                    informative += check_admissible(&task, &factoring, h);
+                }
+            }
+        }
+
+        assert!(
+            informative > 100,
+            "only {informative} informative estimates"
+        );
     }
 }

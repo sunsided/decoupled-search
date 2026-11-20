@@ -13,6 +13,11 @@ categories = ["algorithms", "science", "no-std"]
 
 [dependencies]
 sas-plus = { version = "0.2.1", default-features = false }
+merge-and-shrink = { version = "0.3.0", path = "../merge-and-shrink", optional = true }
+
+[features]
+## A merge-and-shrink heuristic on decoupled states (`MasHeuristic`).
+merge-and-shrink = ["dep:merge-and-shrink"]
 
 [dev-dependencies]
 criterion = "0.8.2"

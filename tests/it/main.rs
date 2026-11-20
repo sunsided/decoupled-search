@@ -6,6 +6,8 @@ mod dominance;
 mod errors;
 mod fixtures;
 mod heuristic;
+#[cfg(feature = "merge-and-shrink")]
+mod mas;
 mod plan;
 mod random;
 mod star;
