@@ -94,6 +94,31 @@ fn bench_merge_and_shrink(criterion: &mut Criterion) {
     });
 }
 
+/// Times A* with the LM-cut adapter under the fork factoring, on the full
+/// task and on the task reduced by leaf reduction (with leaf reduction in
+/// the search).
+#[cfg(feature = "lm-cut")]
+fn bench_lm_cut(criterion: &mut Criterion) {
+    use decoupled_search::LmCutHeuristic;
+
+    let task = gripper();
+    let factoring = Factoring::fork(&task);
+    let h = LmCutHeuristic::new(&task);
+    criterion.bench_function("astar-lmcut/fork", |b| {
+        b.iter(|| astar(black_box(&task), &factoring, &h));
+    });
+
+    let config = Config {
+        reduce_leaves: true,
+        ..Config::default()
+    };
+    let reduced = config.reduced_task(&task, &factoring).expect("supported");
+    let h = LmCutHeuristic::new(&reduced);
+    criterion.bench_function("astar-lmcut-reduced/fork", |b| {
+        b.iter(|| config.astar(black_box(&task), &factoring, &h));
+    });
+}
+
 /// Runs every benchmark in this file with criterion's command-line flags.
 fn main() {
     let mut criterion = Criterion::default().configure_from_args();
@@ -102,5 +127,7 @@ fn main() {
     bench_pruning(&mut criterion);
     #[cfg(feature = "merge-and-shrink")]
     bench_merge_and_shrink(&mut criterion);
+    #[cfg(feature = "lm-cut")]
+    bench_lm_cut(&mut criterion);
     criterion.final_summary();
 }
