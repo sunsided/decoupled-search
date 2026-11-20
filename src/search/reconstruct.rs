@@ -43,9 +43,9 @@ pub(super) fn plan(task: &DecoupledTask, path: &Path<'_>, cost: Price) -> Plan {
 /// The leaf actions of leaf `leaf` in every stage of `path`, ending in the
 /// cheapest goal leaf state of the last stage.
 fn leaf_stages(task: &DecoupledTask, path: &Path<'_>, leaf: usize) -> Vec<Vec<OpId>> {
-    let compiled = &task.leaves[leaf];
     let (_, last) = path.last().expect("a path has an initial state");
-    let (_, mut target) = compiled
+    let (_, mut target) = task
+        .view(leaf, &last.center)
         .cheapest_goal(&last.prices[leaf])
         .expect("a solution reaches a leaf goal state");
 
@@ -53,7 +53,7 @@ fn leaf_stages(task: &DecoupledTask, path: &Path<'_>, leaf: usize) -> Vec<Vec<Op
     for stage in (0..path.len()).rev() {
         let seeds = stage_seeds(task, path, leaf, stage);
         let mut prices = seeds.clone();
-        let steps = compiled.close(&path[stage].1.center, &mut prices);
+        let steps = task.close(leaf, &path[stage].1.center, &mut prices);
 
         let mut rank = target;
         while let Some((from, op)) = steps[rank] {
@@ -79,9 +79,10 @@ fn stage_seeds(task: &DecoupledTask, path: &Path<'_>, leaf: usize, stage: usize)
         return compiled.initial_prices();
     };
 
-    let previous = path[stage - 1].1.prices[leaf].to_dense(compiled.size);
+    let before = path[stage - 1].1;
+    let previous = before.prices[leaf].to_dense(compiled.size);
     match &task.globals[action].parts[leaf] {
-        Some(part) => compiled.transfer(part, &previous),
+        Some(part) => task.view(leaf, &before.center).transfer(part, &previous),
         None => previous,
     }
 }
@@ -99,9 +100,10 @@ fn step_back(
     let action = path[stage].0.expect("only the initial stage has no action");
     match &task.globals[action].parts[leaf] {
         Some(part) => {
-            let compiled = &task.leaves[leaf];
-            let previous = path[stage - 1].1.prices[leaf].to_dense(compiled.size);
-            compiled.transfer_source(part, &previous, seed, price)
+            let before = path[stage - 1].1;
+            let previous = before.prices[leaf].to_dense(task.leaves[leaf].size);
+            task.view(leaf, &before.center)
+                .transfer_source(part, &previous, seed, price)
         }
         None => seed,
     }

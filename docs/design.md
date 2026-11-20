@@ -181,13 +181,52 @@ admissible and meant for GBFS. How Gnad and Hoffmann (2015) fold leaf
 prices into `h^max` is not checked against the paper. LM-cut and
 `merge-and-shrink` heuristics remain open.
 
-## Unsupported input
+## Conditional effects and axioms
 
-Milestone 1 rejects tasks with axioms or derived variables
-(`Error::Axioms`) and operators with conditional effects
-(`Error::ConditionalEffects`). Conditional effects on a leaf are
-manageable (evaluate per rank); conditions spanning leaves are not, and would
-have to turn the operator into a global action with per-leaf case splits.
+*Conditional effects.* An effect fires when its conditions hold in the
+state the operator is applied in; effects apply in operator order and a
+later firing effect on the same variable wins, as in `sas_plus::Task::apply`.
+Decoupled search evaluates them per leaf state where it can:
+
+- an effect on leaf `L` may be conditioned on the center and on `L`. It is
+  evaluated per rank, on the center the operator is applied in (fixed
+  during leaf closure, the predecessor center for a global action);
+- an effect on the center may be conditioned only on the center. A
+  condition on a leaf would make the successor center depend on the leaf
+  state (`Error::CenterEffectReadsLeaf`);
+- an effect on leaf `L` conditioned on another leaf would couple the two
+  leaves (`Error::EffectConditionAcrossLeaves`).
+
+An operator is a leaf action of `L` if its preconditions, effects and
+effect conditions all lie in `C ∪ L` and it sets something in `L` but
+nothing in `C`.
+
+*Axioms.* Derived variables are never leaf variables (`Factoring::new`
+rejects them with `Error::DerivedInLeaf`, the strategies keep them in the
+center). The compiler follows each derived variable's rules transitively to
+the state variables they read:
+
+- only center variables: the derived variable is a center slot,
+  re-evaluated after every center change;
+- the center and one leaf `L`: it is *attached* to `L` as an extra slot
+  whose value is evaluated per rank under the current center (a `View`
+  evaluates all attached slots once per center). Preconditions, goals and
+  effect conditions on it are facts on `L`;
+- two leaves: `Error::AxiomAcrossLeaves`.
+
+Evaluation mirrors `sas_plus::Task::evaluate_axioms` on a scratch
+assignment, restricted to the derived variables of one factor, which is
+closed under dependencies; a unit test compares it with sas-plus on random
+states. Leaves with attached derived variables cost `O(|S_L| * rules)` per
+closure and transfer for the evaluation.
+
+*Heuristics.* `h^max` and `h^FF` split operators into one relaxed operator
+for the unconditional effects and one per conditional effect (preconditions
+plus conditions), add every axiom as a 0-cost relaxed operator, and seed the
+default value of every derived variable at cost 0: no relaxed operator
+produces a default value, and without the seed a goal on it would make
+`h^max` declare a solvable state a dead end.
+
 Invalid tasks are rejected via `Task::validate`.
 
 ## Testing strategy

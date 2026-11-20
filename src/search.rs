@@ -79,8 +79,11 @@ struct Search<'t> {
 /// # Errors
 ///
 /// - [`Error::InvalidTask`] if `task` does not validate.
-/// - [`Error::Axioms`] if `task` has axioms or derived variables.
-/// - [`Error::ConditionalEffects`] if an operator has conditional effects.
+/// - [`Error::CenterEffectReadsLeaf`], [`Error::EffectConditionAcrossLeaves`]
+///   or [`Error::AxiomAcrossLeaves`] for conditional effects and axioms that
+///   decoupled search cannot express under `factoring`.
+/// - [`Error::DerivedInLeaf`] if `factoring` puts a derived variable in a
+///   leaf.
 /// - [`Error::FactoringMismatch`] or [`Error::LeafTooLarge`] if `factoring`
 ///   was built for a different task.
 ///
@@ -270,7 +273,13 @@ impl Search<'_> {
         self.by_center.get(&state.center).is_some_and(|ids| {
             ids.iter().any(|&id| {
                 let node = &self.nodes[id];
-                (self.order == Order::Greedy || node.g <= g) && node.state.prices_at_most(state)
+                (self.order == Order::Greedy || node.g <= g)
+                    && node
+                        .state
+                        .prices
+                        .iter()
+                        .zip(&state.prices)
+                        .all(|(a, b)| a.at_most(b))
             })
         })
     }

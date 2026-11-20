@@ -33,6 +33,7 @@ impl Factoring {
     ///
     /// - [`Error::UnknownVariable`] if a leaf names a variable `task` lacks.
     /// - [`Error::DuplicateVariable`] if a variable appears twice.
+    /// - [`Error::DerivedInLeaf`] if a leaf names a derived variable.
     /// - [`Error::EmptyLeaf`] if a leaf has no variables.
     /// - [`Error::LeafTooLarge`] if a leaf has more than [`MAX_LEAF_STATES`]
     ///   states.
@@ -49,6 +50,10 @@ impl Factoring {
                     return Err(Error::DuplicateVariable { var });
                 }
 
+                if task.variables[var].is_derived() {
+                    return Err(Error::DerivedInLeaf { var });
+                }
+
                 *seen = true;
             }
 
@@ -61,8 +66,14 @@ impl Factoring {
     }
 
     /// A factoring with the given, already checked leaves; all other
-    /// variables form the center.
-    fn from_leaves(task: &Task, leaves: Vec<Vec<VarId>>) -> Self {
+    /// variables form the center. Derived variables are moved to the center,
+    /// and leaves left empty by that are dropped.
+    fn from_leaves(task: &Task, mut leaves: Vec<Vec<VarId>>) -> Self {
+        for leaf in &mut leaves {
+            leaf.retain(|&v| !task.variables[v].is_derived());
+        }
+
+        leaves.retain(|leaf| !leaf.is_empty());
         let mut in_leaf = vec![false; task.num_variables()];
         for &v in leaves.iter().flatten() {
             in_leaf[v] = true;

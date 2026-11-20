@@ -19,17 +19,27 @@ fn tiny() -> Task {
     }
 }
 
-/// Axioms, conditional effects and invalid tasks are errors, not wrong plans.
+/// Conditional effects and axioms the decoupled semantics cannot express,
+/// and invalid tasks, are errors, not wrong plans.
 #[test]
 fn unsupported_tasks_are_rejected() {
+    // Effect 0 sets a under b = 0.
     let mut task = tiny();
     task.operators[0].eff[0].conditions.push(Fact::new(1, 0));
-    let factoring = Factoring::fork(&task);
+    let split = Factoring::new(&task, vec![vec![0], vec![1]]).expect("valid");
     assert_eq!(
-        search(&task, &factoring),
-        Err(Error::ConditionalEffects { op: 0 })
+        search(&task, &split),
+        Err(Error::EffectConditionAcrossLeaves { op: 0, effect: 0 })
     );
+    let center_a = Factoring::new(&task, vec![vec![1]]).expect("valid");
+    assert_eq!(
+        search(&task, &center_a),
+        Err(Error::CenterEffectReadsLeaf { op: 0, effect: 0 })
+    );
+    let one_leaf = Factoring::new(&task, vec![vec![0, 1]]).expect("valid");
+    assert!(search(&task, &one_leaf).is_ok());
 
+    // d = 1 iff a = 1 and b = 1.
     let mut task = tiny();
     task.variables.push(Variable {
         axiom_layer: Some(0),
@@ -37,11 +47,23 @@ fn unsupported_tasks_are_rejected() {
     });
     task.initial.0.push(0);
     task.axioms.push(Axiom {
-        conditions: vec![Fact::new(0, 1)],
+        conditions: vec![Fact::new(0, 1), Fact::new(1, 1)],
         head: Fact::new(2, 1),
     });
-    let factoring = Factoring::fork(&task);
-    assert_eq!(search(&task, &factoring), Err(Error::Axioms));
+    let split = Factoring::new(&task, vec![vec![0], vec![1]]).expect("valid");
+    assert_eq!(
+        search(&task, &split),
+        Err(Error::AxiomAcrossLeaves {
+            var: 2,
+            leaves: (0, 1)
+        })
+    );
+    assert_eq!(
+        Factoring::new(&task, vec![vec![2]]),
+        Err(Error::DerivedInLeaf { var: 2 })
+    );
+    let attached = Factoring::new(&task, vec![vec![0, 1]]).expect("valid");
+    assert!(search(&task, &attached).is_ok());
 
     let mut task = tiny();
     task.goal[0].value = 5;

@@ -58,13 +58,43 @@ pub const MAX_LEAF_STATES: usize = 1 << 16;
 pub enum Error {
     /// The task failed [`sas_plus::Task::validate`].
     InvalidTask(TaskError),
-    /// The task has axioms or derived variables, which are not supported yet.
-    Axioms,
-    /// Operator `op` has a conditional effect, which is not supported yet.
-    ConditionalEffects {
+    /// Effect `effect` of operator `op` sets a center variable under a
+    /// condition on a leaf variable. The successor's center would then
+    /// depend on which leaf state the operator is applied in, which a single
+    /// decoupled successor cannot express.
+    CenterEffectReadsLeaf {
         /// The offending operator.
         op: OpId,
+        /// Index of the offending effect in the operator's effect list.
+        effect: usize,
     },
+    /// Effect `effect` of operator `op` sets a variable of one leaf under a
+    /// condition on another leaf, which would couple the two leaves' states.
+    EffectConditionAcrossLeaves {
+        /// The offending operator.
+        op: OpId,
+        /// Index of the offending effect in the operator's effect list.
+        effect: usize,
+    },
+    /// Derived variable `var` depends (directly or through other derived
+    /// variables) on the state variables of two leaves, so its value is not
+    /// a function of the center and one leaf state.
+    AxiomAcrossLeaves {
+        /// The offending derived variable.
+        var: VarId,
+        /// Two of the leaves it depends on, smaller index first.
+        leaves: (usize, usize),
+    },
+    /// A leaf names derived variable `var`. Derived variables are never
+    /// leaf variables: they stay in the center of a factoring and are
+    /// evaluated with the factor they depend on.
+    DerivedInLeaf {
+        /// The offending derived variable.
+        var: VarId,
+    },
+    /// Leaf prices without costs (reachability-only leaves) were requested
+    /// for a cost-optimal search, which needs the prices.
+    ReachabilityNotOptimal,
     /// A leaf names variable `var`, which the task does not have.
     UnknownVariable {
         /// The offending variable.
@@ -103,12 +133,23 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidTask(e) => write!(f, "invalid task: {e}"),
-            Self::Axioms => write!(f, "axioms and derived variables are not supported"),
-            Self::ConditionalEffects { op } => {
-                write!(
-                    f,
-                    "operator {op} has conditional effects, which are not supported"
-                )
+            Self::CenterEffectReadsLeaf { op, effect } => write!(
+                f,
+                "effect {effect} of operator {op} sets the center under a leaf condition"
+            ),
+            Self::EffectConditionAcrossLeaves { op, effect } => write!(
+                f,
+                "effect {effect} of operator {op} sets one leaf under a condition on another"
+            ),
+            Self::AxiomAcrossLeaves {
+                var,
+                leaves: (a, b),
+            } => write!(f, "derived variable {var} depends on leaves {a} and {b}"),
+            Self::DerivedInLeaf { var } => {
+                write!(f, "derived variable {var} cannot be a leaf variable")
+            }
+            Self::ReachabilityNotOptimal => {
+                write!(f, "reachability-only leaves need a greedy search")
             }
             Self::UnknownVariable { var } => write!(f, "unknown variable {var} in a leaf"),
             Self::DuplicateVariable { var } => write!(f, "variable {var} appears twice"),

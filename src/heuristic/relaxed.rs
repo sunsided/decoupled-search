@@ -5,7 +5,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::cmp::Reverse;
 
-use sas_plus::{Fact, Task};
+use sas_plus::{Effect, Fact, OpId, Task};
 
 use super::FactPrices;
 
@@ -28,8 +28,11 @@ struct RelaxedOp {
     pre: Vec<usize>,
     /// Fact indices of the effects.
     eff: Vec<usize>,
-    /// The operator cost.
+    /// The operator cost; 0 for axioms.
     cost: u64,
+    /// The task operator this relaxed operator comes from, `None` for an
+    /// axiom. An operator with conditional effects yields several.
+    source: Option<OpId>,
 }
 
 /// The cost of every fact after an exploration, and the operator that last
@@ -46,8 +49,15 @@ struct Exploration {
 pub(crate) struct Relaxation {
     /// Every fact of the task, by fact index.
     facts: Vec<Fact>,
-    /// The relaxed operators, by operator id.
+    /// The relaxed operators: per task operator one for its unconditional
+    /// effects and one per conditional effect, then one per axiom.
     ops: Vec<RelaxedOp>,
+    /// Number of task operators.
+    num_operators: usize,
+    /// Facts that are always reachable at cost 0: the default values of
+    /// derived variables, which hold whenever no axiom fires and which no
+    /// relaxed operator produces.
+    free: Vec<usize>,
     /// For every fact, the operators that have it as a precondition.
     pre_of: Vec<Vec<usize>>,
     /// Fact indices of the goal.
@@ -69,19 +79,39 @@ impl Relaxation {
         }
 
         let index = |f: &Fact| offsets[f.var] + usize::try_from(f.value).expect("u32 fits usize");
-        let ops: Vec<RelaxedOp> = task
-            .operators
-            .iter()
-            .map(|op| {
-                let mut pre: Vec<usize> = op.pre.iter().map(index).collect();
-                pre.sort_unstable();
-                pre.dedup();
-                RelaxedOp {
-                    pre,
-                    eff: op.eff.iter().map(|e| index(&e.fact)).collect(),
-                    cost: u64::from(op.cost),
-                }
-            })
+        let relaxed = |pre: &mut dyn Iterator<Item = &Fact>, eff: Vec<usize>, cost, source| {
+            let mut pre: Vec<usize> = pre.map(index).collect();
+            pre.sort_unstable();
+            pre.dedup();
+            RelaxedOp {
+                pre,
+                eff,
+                cost,
+                source,
+            }
+        };
+
+        let mut ops = Vec::new();
+        for (id, op) in task.operators.iter().enumerate() {
+            let cost = u64::from(op.cost);
+            let (plain, conditional): (Vec<&Effect>, Vec<&Effect>) =
+                op.eff.iter().partition(|e| e.conditions.is_empty());
+            let eff = plain.iter().map(|e| index(&e.fact)).collect();
+            ops.push(relaxed(&mut op.pre.iter(), eff, cost, Some(id)));
+            for e in conditional {
+                let mut pre = op.pre.iter().chain(&e.conditions);
+                ops.push(relaxed(&mut pre, vec![index(&e.fact)], cost, Some(id)));
+            }
+        }
+
+        for axiom in &task.axioms {
+            let eff = vec![index(&axiom.head)];
+            ops.push(relaxed(&mut axiom.conditions.iter(), eff, 0, None));
+        }
+
+        let free = (0..task.num_variables())
+            .filter(|&v| task.variables[v].is_derived())
+            .map(|v| index(&Fact::new(v, task.initial.0[v])))
             .collect();
 
         let mut pre_of = vec![Vec::new(); facts.len()];
@@ -94,6 +124,8 @@ impl Relaxation {
         Self {
             facts,
             ops,
+            num_operators: task.operators.len(),
+            free,
             pre_of,
             goal: task.goal.iter().map(index).collect(),
         }
@@ -118,7 +150,7 @@ impl Relaxation {
         }
 
         let mut seen = vec![false; self.facts.len()];
-        let mut used = vec![false; self.ops.len()];
+        let mut used = vec![false; self.num_operators];
         let mut stack = self.goal.clone();
         let (mut plan_cost, mut seed_cost) = (0_u64, 0_u64);
         while let Some(f) = stack.pop() {
@@ -126,13 +158,17 @@ impl Relaxation {
                 continue;
             }
 
-            match explored.supporter[f] {
-                Some(op) if !core::mem::replace(&mut used[op], true) => {
-                    plan_cost = plan_cost.saturating_add(self.ops[op].cost);
-                    stack.extend_from_slice(&self.ops[op].pre);
-                }
-                Some(_) => {}
-                None => seed_cost = seed_cost.max(explored.cost[f]),
+            let Some(op) = explored.supporter[f] else {
+                seed_cost = seed_cost.max(explored.cost[f]);
+                continue;
+            };
+
+            stack.extend_from_slice(&self.ops[op].pre);
+            let first_use = self.ops[op]
+                .source
+                .is_some_and(|source| !core::mem::replace(&mut used[source], true));
+            if first_use {
+                plan_cost = plan_cost.saturating_add(self.ops[op].cost);
             }
         }
 
@@ -187,11 +223,15 @@ struct Run {
 impl Run {
     /// Starts an exploration of `relaxation` with every priced fact open.
     fn seeded(relaxation: &Relaxation, prices: &FactPrices<'_>) -> Self {
-        let cost: Vec<u64> = relaxation
+        let mut cost: Vec<u64> = relaxation
             .facts
             .iter()
             .map(|&f| prices.get(f).unwrap_or(UNREACHED))
             .collect();
+        for &f in &relaxation.free {
+            cost[f] = 0;
+        }
+
         let open = cost
             .iter()
             .enumerate()
