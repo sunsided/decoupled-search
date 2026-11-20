@@ -263,40 +263,55 @@ pub struct Config {
     /// stored state. Default: 256.
     pub max_analysis_states: usize,
     /// Whether to shrink the leaf state spaces by leaf simulation before
-    /// searching (Torralba et al. 2016, Section 6, in our own formulation;
-    /// their exact rule is in a technical report not checked here).
+    /// searching: the superfluous-transition rule of Torralba, Gnad,
+    /// Dubbert and Hoffmann (IJCAI 2016, Section 6 of the extended
+    /// technical report), with a removal order that makes it sound.
     /// Default: `false`.
     ///
     /// On every analysed leaf (see [`Config::max_analysis_states`]), the
-    /// leaf simulation `⪯` of [`Pruning::Simulation`] is computed once, and
-    /// a leaf transition `x -a-> x'` is removed if
+    /// leaf simulation `⪯` of [`Pruning::Simulation`] is computed once.
+    /// Say that `x -b-> y'` *replaces* `x -a-> x'` if `cost(b) <= cost(a)`,
+    /// `b`'s center preconditions are contained in `a`'s, and `x' ⪯ y'`. A
+    /// leaf transition `x -a-> x'` is removed if
     ///
     /// 1. `x' ⪯ x`: staying at `x` is as good, or
-    /// 2. another leaf action `b` applicable in `x`, `x -b-> y'`, has
-    ///    `cost(b) <= cost(a)`, center preconditions contained in `a`'s, a
-    ///    smaller key `(cost, number of center preconditions, index)`, and
-    ///    `x' ⪯ y'`.
+    /// 2. another leaf action `b` applicable in `x` replaces it, and either
+    ///    `a` does not replace `b` in turn or `b` has the smaller index.
     ///
-    /// Leaf closure then skips removed transitions, so fewer leaf states
-    /// are reached and stored ([`Statistics::reduced_leaf_transitions`] and
-    /// [`Statistics::unreachable_leaf_states`] report the effect).
+    /// The report states rule 2 without the last condition and without a
+    /// removal order; read as one simultaneous step, it would remove both
+    /// of two transitions that replace each other (for example two copies
+    /// of one action), which is unsound. Removing one transition at a time,
+    /// each justified by one still present, removes exactly what the rules
+    /// above remove, up to which of two mutually replacing transitions
+    /// stays. The report also drops leaf states that become unreachable and
+    /// leaf actions without transitions; here leaf closure skips removed
+    /// transitions, so those states are never reached and stored
+    /// ([`Statistics::reduced_leaf_transitions`] and
+    /// [`Statistics::unreachable_leaf_states`] report the effect), but the
+    /// heuristics still see every operator.
     ///
-    /// *Soundness.* Take any compliant leaf path `ρ` of the full leaf
-    /// system, and its first removed step `s_i -a-> s_{i+1}`. Under rule 2
-    /// its replacement `b` may be removed too, but then by a still smaller
-    /// key, so the chain ends in a kept step `s_i -c-> z` (or in staying,
-    /// rule 1) with `s_{i+1} ⪯ z` by transitivity. `c` is applicable
-    /// wherever `a` was (weaker center preconditions) and no dearer. By the
-    /// simulation, the rest of `ρ` is mirrored from `z` at no higher cost,
-    /// in no more steps, meeting the same global preconditions and ending
-    /// in a goal leaf state. Repeating at the next removed step terminates:
-    /// each round either fixes one more step or (rule 1) shortens the
-    /// path. So every completion of the full system has one of the reduced
-    /// system at no higher cost, which preserves optimality and
-    /// solvability, and every reduced completion is a real one. The
-    /// dominance analyses still use the full transitions, which only makes
-    /// frontier and effective-price bounds more conservative, and mirrored
-    /// paths in the simulation bound are converted the same way.
+    /// *Soundness* (the report gives no proof). "Replaces" is reflexive and
+    /// transitive on the transitions leaving `x`; ordering by it, and by
+    /// index between transitions that replace each other, is a strict
+    /// partial order on a finite set, and rule 2 removes only transitions
+    /// below a greater one. Take any compliant leaf path `ρ` of the full
+    /// leaf system, and its first removed step `s_i -a-> s_{i+1}`.
+    /// Following rule 2 upwards ends in a maximal transition `s_i -c-> z`,
+    /// which rule 2 keeps, with `s_{i+1} ⪯ z` by transitivity; if rule 1
+    /// removes it, staying at `s_i` (`z ⪯ s_i`) is as good. `c` is
+    /// applicable wherever `a` was (weaker center preconditions) and no
+    /// dearer. By the simulation, the rest of `ρ` is mirrored from `z` (or
+    /// `s_i`) at no higher cost, in no more steps, meeting the same global
+    /// preconditions and ending in a goal leaf state. Repeating at the next
+    /// removed step terminates: each round either fixes one more step or
+    /// (staying) shortens the path. So every completion of the full system
+    /// has one of the reduced system at no higher cost, which preserves
+    /// optimality and solvability, and every reduced completion is a real
+    /// one. The dominance analyses still use the full transitions, which
+    /// only makes frontier and effective-price bounds more conservative,
+    /// and mirrored paths in the simulation bound are converted the same
+    /// way.
     pub reduce_leaves: bool,
 }
 

@@ -150,16 +150,19 @@ pub(crate) fn redundant_transitions(
     let transitions = transitions(&view, parts);
     let weaker = weaker_actions(leaf);
     let count = leaf.actions.len();
-    let key = |a: usize| (leaf.actions[a].cost, leaf.actions[a].center_pre.len(), a);
+    // Whether `x -b-> y` replaces `x -a-> target`.
+    let replaces = |(b, y): (usize, usize), (a, target): (usize, usize)| {
+        weaker[a * count + b] && rel[target].contains(y)
+    };
 
     let mut disabled = vec![false; leaf.size * count];
     for (x, out) in transitions.leaf.iter().enumerate() {
         for &(a, nx) in out {
             let stays = rel[nx].contains(x);
-            let replaced = out
-                .iter()
-                .any(|&(b, ny)| key(b) < key(a) && weaker[a * count + b] && rel[nx].contains(ny));
-            disabled[x * count + a] = stays || replaced;
+            let superseded = out.iter().any(|&(b, ny)| {
+                b != a && replaces((b, ny), (a, nx)) && (b < a || !replaces((a, nx), (b, ny)))
+            });
+            disabled[x * count + a] = stays || superseded;
         }
     }
 
@@ -286,7 +289,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use sas_plus::{Effect, Fact, Operator, State, Task, Variable};
+    use sas_plus::{Effect, Fact, OpId, Operator, State, Task, Variable};
 
     use super::*;
     use crate::Factoring;
@@ -336,5 +339,101 @@ mod tests {
         assert_eq!(simulators_of(2), [1, 2, 3]);
         assert_eq!(simulators_of(1), [1]);
         assert_eq!(simulators_of(3), [1, 3]);
+    }
+
+    /// A center switch `c` and a leaf `v` (0, 1, 2; goal 2). From 0, `a`
+    /// (index 0) leads to 1 and `b` (index 1) to 2, both at cost 1 without
+    /// center preconditions; from 1, `d` reaches 2 for free once `c` is on.
+    /// Every operator is named after itself, so tests can find it.
+    fn shortcut() -> DecoupledTask {
+        let op = |name: &str, pre: Vec<Fact>, eff: Fact, cost| Operator {
+            name: name.into(),
+            pre,
+            eff: vec![Effect::new(eff)],
+            cost,
+        };
+        let task = Task {
+            variables: vec![Variable::new("c", 2), Variable::new("v", 3)],
+            operators: vec![
+                op("a", vec![Fact::new(1, 0)], Fact::new(1, 1), 1),
+                op("b", vec![Fact::new(1, 0)], Fact::new(1, 2), 1),
+                op(
+                    "d",
+                    vec![Fact::new(0, 1), Fact::new(1, 1)],
+                    Fact::new(1, 2),
+                    0,
+                ),
+                op("on", vec![], Fact::new(0, 1), 1),
+            ],
+            initial: State(vec![0, 0]),
+            goal: vec![Fact::new(1, 2)],
+            axioms: vec![],
+        };
+        DecoupledTask::new(&task, &Factoring::fork(&task)).expect("supported")
+    }
+
+    /// `b` replaces `a` (same cost and center preconditions, and its target
+    /// 2 simulates `a`'s target 1), but not the other way round (1 does not
+    /// satisfy the goal). The Torralba et al. technical report removes `a`
+    /// then; the index tie-break between equal costs must not stop that.
+    /// Nothing else goes: 1 does not simulate 0 (`d` is free from 1 only).
+    #[test]
+    fn one_directional_replacement_removes_the_dominated_transition() {
+        let task = shortcut();
+        let leaf = &task.leaves[0];
+        let rel = simulators(leaf, &[]);
+        assert!(rel[1].contains(2) && !rel[2].contains(1) && !rel[0].contains(1));
+
+        let (disabled, lost) = redundant_transitions(leaf, &[], &rel);
+        let count = leaf.actions.len();
+        let removed: Vec<(usize, OpId)> = (0..leaf.size)
+            .flat_map(|x| (0..count).map(move |a| (x, a)))
+            .filter(|&(x, a)| disabled[x * count + a])
+            .map(|(x, a)| (x, leaf.actions[a].op))
+            .collect();
+        assert_eq!(removed, [(0, 0)], "only a, from 0");
+        assert_eq!(lost, 1, "1 was reachable only through a");
+    }
+
+    /// Two copies of the same leaf action replace each other; exactly one
+    /// of them must stay, or the leaf could not move at all.
+    #[test]
+    fn duplicate_actions_keep_one_copy() {
+        let op = |name: &str| Operator {
+            name: name.into(),
+            pre: vec![Fact::new(1, 0)],
+            eff: vec![Effect::new(Fact::new(1, 1))],
+            cost: 1,
+        };
+        let task = Task {
+            variables: vec![Variable::new("c", 2), Variable::new("v", 2)],
+            operators: vec![
+                op("first"),
+                op("second"),
+                Operator {
+                    name: "on".into(),
+                    pre: vec![],
+                    eff: vec![Effect::new(Fact::new(0, 1))],
+                    cost: 1,
+                },
+            ],
+            initial: State(vec![0, 0]),
+            goal: vec![Fact::new(1, 1)],
+            axioms: vec![],
+        };
+        let factoring = Factoring::new(&task, vec![vec![1]]).expect("valid");
+        let task = DecoupledTask::new(&task, &factoring).expect("supported");
+        let leaf = &task.leaves[0];
+        let rel = simulators(leaf, &[]);
+        let (disabled, lost) = redundant_transitions(leaf, &[], &rel);
+
+        let count = leaf.actions.len();
+        assert_eq!(count, 2);
+        assert_eq!(
+            (disabled[0], disabled[1]),
+            (false, true),
+            "the later copy goes"
+        );
+        assert_eq!(lost, 0);
     }
 }

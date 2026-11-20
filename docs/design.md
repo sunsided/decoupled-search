@@ -147,8 +147,9 @@ global actions at no higher total cost. Dominated nodes already in the open
 list are not removed, and the store is a list per center state.
 
 `Config::pruning` selects one of the criteria of Torralba, Gnad, Dubbert and
-Hoffmann (IJCAI 2016), checked against the paper and generalised to this
-crate's global actions. Each gives a bound `D_t(x)` for every leaf state `x`
+Hoffmann (IJCAI 2016), checked against the paper and its extended
+technical report (see the table below) and generalised to this crate's
+global actions. Each gives a bound `D_t(x)` for every leaf state `x`
 reached in `n`: what `t` must pay to do whatever `n` can do from `x`.
 
 | `Pruning` | Bound and compared states | Paper |
@@ -221,21 +222,48 @@ are recomputed after the switch. Measured on gripper (fork, uniform-cost,
 release, criterion `--quick`): `Basic` 22 µs, `Adaptive` 40–57 µs,
 `EffectiveSimulation` 700–750 µs.
 
-*Leaf reduction* (`Config::reduce_leaves`, default off). The paper also
-uses simulation to remove superfluous leaf transitions and then leaf states
-(details in its technical report, not checked). Our rule: remove
-`x -a-> x'` if `x' ⪯ x`, or if another leaf action `b` applicable in `x`
-with `cost(b) <= cost(a)`, center preconditions contained in `a`'s, a
-smaller key `(cost, |center pre|, index)` and `x -b-> y'` has `x' ⪯ y'`.
-Leaf closure skips removed transitions, so leaf states only reachable
-through them are never reached. Soundness (proof on `Config::reduce_leaves`):
-the first removed step of any compliant leaf path is replaced, via a
-well-founded chain of keys, by a kept step or by staying, and the rest of
-the path is mirrored by the simulation; repeating terminates, so the
-reduced system loses no completion and no cost. On the Logistics example
-it removes the five unloads at non-goal locations and the load at the goal
-(those states become unreachable) and stores fewer decoupled states.
-Reconstruction runs the same reduced closure, so plans stay consistent.
+*Leaf reduction* (`Config::reduce_leaves`, default off). Section 6 of
+the extended technical report calls a leaf transition `x -a-> x'`
+superfluous if `x' ⪯ x`, or if another transition `x -b-> y'` has
+`x' ⪯ y'`, center preconditions contained in `a`'s and `cost(b) <=
+cost(a)`; it then removes unreachable leaf states and leaf actions without
+transitions. It gives no removal order and no proof. Read as one
+simultaneous step the rule is unsound: two transitions that replace each
+other (two copies of one action) would both go. We remove `a` under the
+second condition only if `a` does not replace `b` in turn or `b` has the
+smaller index, which is what one-at-a-time removal, each step justified by
+a transition still present, removes (up to which of two mutually replacing
+transitions stays). Leaf closure skips removed transitions, so leaf states
+only reachable through them are never reached; the heuristics still see
+every operator, so the report's heuristic gain from removed actions (LM-cut
+in Logistics98) is not reproduced. Soundness (our proof, on
+`Config::reduce_leaves`): "replaces" is a preorder, the index tie-break
+makes the removal order a strict partial order, so the first removed step
+of any compliant leaf path can be replaced by a kept step or by staying,
+and the rest of the path is mirrored by the simulation; repeating
+terminates, so the reduced system loses no completion and no cost. On the
+Logistics example it removes the five unloads at non-goal locations and
+the load at the goal (those states become unreachable) and stores fewer
+decoupled states. Reconstruction runs the same reduced closure, so plans
+stay consistent.
+
+*Checked against the papers.* Torralba, Gnad, Dubbert and Hoffmann, IJCAI
+2016 and its extended technical report (the definitions are identical in
+both; the proofs and the leaf reduction are in the report only):
+
+| Paper | Paper rule | Our code | Status |
+| --- | --- | --- | --- |
+| Def. 1 | `s ⪯_B t` iff same center and `prices(s) >= prices(t)` everywhere | `Pruning::Basic`, all reached states of `n` | matches |
+| Def. 2 | frontier: the goal leaf state, plus `x` with a leaf transition `x -a-> y`, `price(x) + cost(a) < price(y)` (transitions ignore the center) | anchored states (goal *or* a global part's leaf precondition) plus the same improvement test over leaf actions under any center | deliberate deviation: global actions may read and write leaves, so a leaf state can also matter by enabling one; the report's proof (last state on the path whose price equals the path cost) then ends in an anchored state |
+| Def. 3 | compare prices on the frontier of `s` | `Pruning::Frontier` | matches |
+| Def. 4 | `Eprices(t)`: least `p` with `p = price` at the goal, `min(price, max_{x -a-> y} p(y) - cost(a))` elsewhere | `effective_prices`, anchored states keep the base bound; max-heap Dijkstra backwards | deliberate deviation (anchored for goal), as Def. 2 |
+| Def. 5 | leaf simulation: goal only simulated by goal; each `x -a-> x'` matched by staying or by `y -b-> y'`, `pre_C(b) ⊆ pre_C(a)`, `cost(b) <= cost(a)`; coarsest one | `simulation::simulators`, coarsest by worklist refinement; partial goals (goal states only simulated by goal states) and every global part matched by itself | deliberate deviation (global parts, partial goals), proof in the module rustdoc |
+| Def. 6 | `min_{x ⪯ y} price(t)(y)` | `simulation_bounds` | matches |
+| Def. 7 | `ESprices`: as Def. 4 with the simulation minimum off the goal, the plain price at the goal | the simulation minimum on anchored states too | deliberate deviation, sound by Theorem 5's argument (Lemma 1 holds from every leaf state); it can only prune more |
+| Sec. 3 | prune `s` if a seen `t` has `s ⪯ t` and `g(s) >= g(t)`; dominance also requires `d*(s) >= d*(t)` for 0-cost actions | `fold_g = false`: `g(t) <= g(n)` and every bound at most the price; `fold_g = true` (default): one budget `g(t) + Σ_L δ_L <= g(n)` | deliberate extension (subsumes the paper's rule); no `d*` condition, because every criterion maps a completion to one with the same remaining global actions, see *Optimality of A\** |
+| Sec. 3 | fork factorings, one goal leaf state, center actions do not touch leaves | star factorings with global actions on leaves, partial leaf goals; leaves with center-dependent transitions or more than `max_analysis_states` states use Def. 1 | deliberate generalisation, proofs on `Pruning` |
+| Sec. 6 (report) | superfluous transitions, then unreachable leaf states, then actions without transitions | rule 2 with the removal order above; states and actions stay but are never reached | bug in the literal rule avoided; ours strengthened to match one-at-a-time removal (before, equal-cost and equal-precondition replacements were kept whenever the replacing action had the larger index; regression test `one_directional_replacement_removes_the_dominated_transition`) |
+| Sec. 8 | DA\* and anytime ADA\* | A\* that stops once the popped key reaches the best solution cost recorded at generation; no ADA\* | ADA\* not implemented |
 
 ## Reachability-only leaves
 
@@ -444,4 +472,6 @@ centers.
   Ranking Star Factorings for Decoupled Search.* IJCAI 2017, pp. 4310–4316.
 - Álvaro Torralba, Daniel Gnad, Patrick Dubbert and Jörg Hoffmann. *On
   State-Dominance Criteria in Fork-Decoupled Search.* IJCAI 2016,
-  pp. 3265–3271.
+  pp. 3265–3271. Extended technical report with the proofs and the leaf
+  reduction rule:
+  <https://fai.cs.uni-saarland.de/hoffmann/papers/ijcai16b-tr.pdf>.
