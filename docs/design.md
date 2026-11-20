@@ -103,6 +103,7 @@ sample searches instead; see the table.
 | Sec. 4.1 | all maximum independent sets found within 10 s | up to 16 within a deterministic work budget | deliberate deviation: `no_std`, reproducible |
 | Sec. 4 | abstain below two mobile leaves | `incident_arcs` and `max_leaves` return their best candidate anyway; `auto` abstains (no leaves) | deliberate: the strategy functions return a `Factoring`, not an `Option`; `auto` used to accept a single mobile leaf |
 | Sec. 5 | pick a factoring by 1 s sample searches: expansions (optimal), heuristic improvement (satisficing) | static score: leaf-action share, mobile leaves, largest leaf | deliberate deviation: no clock in `no_std`, and `auto` does not know the search configuration; open question |
+| — | no axioms | the inputs of a derived variable count as adjacent in both strategies, so none is split over two leaves (`Error::AxiomAcrossLeaves`) | extension; regression test `strategies_keep_axiom_inputs_in_one_factor` |
 | Sec. 2 | causal graph arcs `pre ∪ eff -> eff` | `sas_plus::CausalGraph`, plus effect conditions and axioms | matches (the extra arcs only keep conditional effects and axioms inside one factor) |
 
 ## Decoupled state and pricing

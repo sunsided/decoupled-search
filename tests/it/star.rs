@@ -3,7 +3,7 @@
 
 use decoupled_search::{Error, Factoring, Strategy};
 use sas_plus::random::{RandomTaskParams, Rng, random_task};
-use sas_plus::{Effect, Fact, Operator, State, Task, VarId, Variable};
+use sas_plus::{Axiom, Effect, Fact, Operator, State, Task, VarId, Variable};
 
 use crate::checked_cost;
 use crate::dijkstra::optimal_cost;
@@ -158,10 +158,10 @@ fn strategies_yield_star_factorings() {
     }
 }
 
-/// The greedy strategies find several leaves on star tasks, and decoupled
-/// search under them matches Dijkstra.
+/// The strategies find several leaves on star tasks, and decoupled search
+/// under them matches Dijkstra.
 #[test]
-fn greedy_strategies_match_dijkstra_on_star_tasks() {
+fn strategies_match_dijkstra_on_star_tasks() {
     let mut multi_leaf_runs = 0;
     for seed in 0..SEEDS {
         let task = random_star_task(seed);
@@ -352,4 +352,58 @@ fn auto_falls_back_to_explicit_search() {
     let auto = Factoring::auto(&task);
     assert!(auto.leaves().is_empty(), "{auto:?}");
     assert_eq!(auto.center(), &[0, 1]);
+}
+
+/// The star strategies never split the inputs of a derived variable over
+/// two leaves, which the search would reject with
+/// [`Error::AxiomAcrossLeaves`]: here `d` (2) is derived from switches `x`
+/// (0) and `y` (1), which no operator connects, so a plain independent set
+/// of the causal graph would make both leaves, and incident arcs, with `d`
+/// in the center, would too. Both strategies treat `x` and `y` as adjacent
+/// and keep them in one leaf.
+#[test]
+fn strategies_keep_axiom_inputs_in_one_factor() {
+    let set = |var| Operator {
+        name: "set".into(),
+        pre: vec![],
+        eff: vec![Effect::new(Fact::new(var, 1))],
+        cost: 1,
+    };
+    let mut derived = Variable::new("d", 2);
+    derived.axiom_layer = Some(0);
+    let task = Task {
+        variables: vec![Variable::new("x", 2), Variable::new("y", 2), derived],
+        operators: vec![set(0), set(1)],
+        initial: State(vec![0, 0, 0]),
+        goal: vec![Fact::new(2, 1)],
+        axioms: vec![Axiom {
+            conditions: vec![Fact::new(0, 1), Fact::new(1, 1)],
+            head: Fact::new(2, 1),
+        }],
+    };
+    for factoring in [
+        Factoring::incident_arcs(&task),
+        Factoring::max_leaves(&task),
+    ] {
+        assert_eq!(factoring.leaves(), &[vec![0, 1]], "{factoring:?}");
+        assert_eq!(checked_cost(&task, &factoring), Some(2), "{factoring:?}");
+    }
+
+    let params = RandomTaskParams {
+        num_derived: 2,
+        ..RandomTaskParams::default()
+    };
+    for seed in 0..SEEDS {
+        let task = random_task(seed, params);
+        for factoring in [
+            Factoring::incident_arcs(&task),
+            Factoring::max_leaves(&task),
+        ] {
+            let score = factoring.score(&task);
+            assert!(
+                !matches!(score, Err(Error::AxiomAcrossLeaves { .. })),
+                "seed {seed}: {factoring:?}"
+            );
+        }
+    }
 }

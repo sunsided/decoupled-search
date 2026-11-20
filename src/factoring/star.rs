@@ -4,7 +4,9 @@
 //! Figure 1, in [`independent_set`]).
 //!
 //! Both build leaves that no causal-graph arc connects, so every result
-//! passes [`Factoring::check_star`]. Both rank their candidates by the
+//! passes [`Factoring::check_star`]. Beyond the paper, which has no axioms,
+//! both also treat the inputs of a derived variable as adjacent, so that
+//! no derived variable depends on two leaves. Both rank their candidates by the
 //! number of *mobile* leaves, leaves with at least one leaf action (the
 //! paper's flexibility `|A^L[F^L] \ A^C| / |A^L[F^L]|` above 0). The paper
 //! abstains below two mobile leaves; these functions return their best
@@ -82,11 +84,12 @@ impl Factoring {
     #[must_use]
     pub fn incident_arcs(task: &Task) -> Self {
         let graph = CausalGraph::new(task);
+        let neighbours = neighbours(task, &graph);
         let mut in_center = vec![false; task.num_variables()];
         let mut best: Option<Candidate> = None;
         for v in incident_arc_order(&graph, task.num_variables()) {
             in_center[v] = true;
-            let candidate = Candidate::new(task, small_components(task, &graph, &in_center));
+            let candidate = Candidate::new(task, small_components(task, &neighbours, &in_center));
             if best.as_ref().is_none_or(|b| candidate.mobile > b.mobile) {
                 best = Some(candidate);
             }
@@ -186,33 +189,86 @@ fn incident_arc_order(graph: &CausalGraph, n: usize) -> Vec<VarId> {
     order
 }
 
-/// The weakly connected components of the non-center variables with at
-/// most [`crate::MAX_LEAF_STATES`] states.
-fn small_components(task: &Task, graph: &CausalGraph, in_center: &[bool]) -> Vec<Vec<VarId>> {
-    weak_components(graph, in_center)
+/// Per variable, its distinct causal-graph neighbours in either direction,
+/// plus the other state variables that feed a derived variable it feeds,
+/// sorted.
+///
+/// The extra edges keep the inputs of every derived variable in one factor:
+/// the search rejects a derived variable that depends on two leaves
+/// ([`crate::Error::AxiomAcrossLeaves`]). The paper has no axioms; without
+/// them this is the causal graph's undirected neighbourhood.
+fn neighbours(task: &Task, graph: &CausalGraph) -> Vec<Vec<VarId>> {
+    let mut out: Vec<Vec<VarId>> = (0..task.num_variables())
+        .map(|v| {
+            graph
+                .successors(v)
+                .iter()
+                .chain(graph.predecessors(v))
+                .copied()
+                .collect()
+        })
+        .collect();
+    for inputs in derived_inputs(task) {
+        for &u in &inputs {
+            out[u].extend(inputs.iter().copied().filter(|&w| w != u));
+        }
+    }
+
+    for list in &mut out {
+        list.sort_unstable();
+        list.dedup();
+    }
+
+    out
+}
+
+/// Per derived variable, the state variables it depends on, directly or
+/// through other derived variables.
+fn derived_inputs(task: &Task) -> Vec<Vec<VarId>> {
+    let n = task.num_variables();
+    let mut direct = vec![Vec::new(); n];
+    for axiom in &task.axioms {
+        direct[axiom.head.var].extend(axiom.conditions.iter().map(|f| f.var));
+    }
+
+    (0..n)
+        .filter(|&v| task.variables[v].is_derived())
+        .map(|derived| {
+            let mut seen = vec![false; n];
+            seen[derived] = true;
+            let mut stack = vec![derived];
+            let mut inputs = Vec::new();
+            while let Some(v) = stack.pop() {
+                for &u in &direct[v] {
+                    if core::mem::replace(&mut seen[u], true) {
+                        continue;
+                    }
+
+                    if task.variables[u].is_derived() {
+                        stack.push(u);
+                    } else {
+                        inputs.push(u);
+                    }
+                }
+            }
+
+            inputs
+        })
+        .collect()
+}
+
+/// The weakly connected components of the non-center variables under
+/// [`neighbours`] with at most [`crate::MAX_LEAF_STATES`] states.
+fn small_components(task: &Task, neighbours: &[Vec<VarId>], in_center: &[bool]) -> Vec<Vec<VarId>> {
+    weak_components(neighbours, in_center)
         .into_iter()
         .filter(|c| leaf_states(task, c).is_some())
         .collect()
 }
 
-/// The distinct neighbours of `v` (either arc direction) that are not in
-/// the center, sorted.
-fn outside_neighbours(graph: &CausalGraph, in_center: &[bool], v: VarId) -> Vec<VarId> {
-    let mut neighbours: Vec<VarId> = graph
-        .successors(v)
-        .iter()
-        .chain(graph.predecessors(v))
-        .copied()
-        .filter(|&u| !in_center[u])
-        .collect();
-    neighbours.sort_unstable();
-    neighbours.dedup();
-    neighbours
-}
-
-/// The weakly connected components of the causal graph restricted to the
-/// non-center variables, each sorted, in order of their smallest variable.
-fn weak_components(graph: &CausalGraph, in_center: &[bool]) -> Vec<Vec<VarId>> {
+/// The weakly connected components of the non-center variables under
+/// [`neighbours`], each sorted, in order of their smallest variable.
+fn weak_components(neighbours: &[Vec<VarId>], in_center: &[bool]) -> Vec<Vec<VarId>> {
     let mut seen = in_center.to_vec();
     let mut components = Vec::new();
     for start in 0..in_center.len() {
@@ -224,7 +280,7 @@ fn weak_components(graph: &CausalGraph, in_center: &[bool]) -> Vec<Vec<VarId>> {
         let mut component = vec![start];
         let mut stack = vec![start];
         while let Some(v) = stack.pop() {
-            for u in outside_neighbours(graph, in_center, v) {
+            for &u in &neighbours[v] {
                 if !seen[u] {
                     seen[u] = true;
                     component.push(u);
