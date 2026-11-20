@@ -2,7 +2,7 @@
 //! removes the blow-up of Torralba et al.'s Logistics example, and the
 //! shared `g` budget prunes more than the plain `g` comparison.
 
-use decoupled_search::{Config, Factoring, HMax, Pruning, Statistics};
+use decoupled_search::{Config, Factoring, HFf, HMax, Leaves, Pruning, Statistics};
 use sas_plus::random::{RandomTaskParams, random_task};
 use sas_plus::{Effect, Fact, Operator, State, Task, Variable};
 
@@ -269,4 +269,41 @@ fn heuristics_on_the_reduced_task_stay_admissible() {
         shrunk > runs / 10,
         "only {shrunk} of {runs} runs removed operators"
     );
+}
+
+/// Greedy search with `h^FF` of the reduced task, under leaf reduction and
+/// with priced or reachability-only leaves, declares no solvable state a
+/// dead end: it is as solvable as Dijkstra says.
+#[test]
+fn greedy_search_on_the_reduced_task_keeps_solvability() {
+    let params = RandomTaskParams {
+        num_ops: 12,
+        ..RandomTaskParams::default()
+    };
+    for seed in 0..60 {
+        let task = random_task(seed, params);
+        let solvable = optimal_cost(&task).is_some();
+        for factoring in factorings(&task) {
+            for leaves in [Leaves::Priced, Leaves::Reachability] {
+                let config = Config {
+                    leaves,
+                    reduce_leaves: true,
+                    ..Config::default()
+                };
+                let reduced = config.reduced_task(&task, &factoring).expect("supported");
+                let plan = config
+                    .gbfs(&task, &factoring, &HFf::new(&reduced))
+                    .expect("supported")
+                    .plan;
+                assert_eq!(
+                    plan.is_some(),
+                    solvable,
+                    "seed {seed}, {leaves:?}, {factoring:?}"
+                );
+                if let Some(plan) = plan {
+                    assert_eq!(plan.validate(&task), Ok(()));
+                }
+            }
+        }
+    }
 }

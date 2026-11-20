@@ -268,6 +268,36 @@ impl Factoring {
     /// # Errors
     ///
     /// As [`Factoring::score`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use decoupled_search::Factoring;
+    /// use sas_plus::{Effect, Fact, Operator, State, Task, Variable};
+    ///
+    /// let op = |pre: Vec<Fact>, eff: Fact| Operator {
+    ///     name: "op".into(),
+    ///     pre,
+    ///     eff: vec![Effect::new(eff)],
+    ///     cost: 2,
+    /// };
+    /// let task = Task {
+    ///     variables: vec![Variable::new("truck", 2), Variable::new("pkg", 2)],
+    ///     operators: vec![
+    ///         op(vec![Fact::new(0, 0)], Fact::new(0, 1)),
+    ///         op(vec![Fact::new(0, 1)], Fact::new(1, 1)),
+    ///     ],
+    ///     initial: State(vec![0, 0]),
+    ///     goal: vec![Fact::new(1, 1)],
+    ///     axioms: vec![],
+    /// };
+    ///
+    /// // The package moves by a leaf action, the truck by a global one.
+    /// let free = Factoring::fork(&task).with_free_leaf_actions(&task)?;
+    /// let costs: Vec<u32> = free.operators.iter().map(|o| o.cost).collect();
+    /// assert_eq!(costs, [2, 0]);
+    /// # Ok::<(), decoupled_search::Error>(())
+    /// ```
     pub fn with_free_leaf_actions(&self, task: &Task) -> Result<Task, Error> {
         let decoupled = DecoupledTask::new(task, self)?;
         let mut free = task.clone();

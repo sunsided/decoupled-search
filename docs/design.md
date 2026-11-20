@@ -391,8 +391,10 @@ Gnad and Hoffmann (2015, Definition 5) fold leaf prices in by a task
 reached leaf state, setting that state at its price (once per leaf). In
 the delete relaxation the once-per-leaf flag never blocks, so `h^max` on
 `Π^L$` gives each leaf fact the cheapest price of a reached leaf state
-containing it, which is exactly our seed: `HMax` matches their
-`h^max_{L$}` (checked against the paper). `HFf` uses the same seeds and
+containing it, which is exactly our seed: `HMax` (plain seeded `h^max` in
+`heuristic/relaxed.rs`) matches their `h^max_{L$}`; the 0-cost seeds for
+the default values of derived variables are our extension, since the
+paper has no axioms. `HFf` uses the same seeds and
 adds the largest seed price its relaxed plan starts from, our own choice
 rather than `h^FF` on `Π^L$`; it is not admissible either way. Their root estimate
 (Definition 6) is `Factoring::with_free_leaf_actions`. LM-cut remains
@@ -451,10 +453,14 @@ Invalid tasks are rejected via `Task::validate`.
 - **Cross-check against explicit-state Dijkstra.** On random tasks from
   `sas_plus::random::random_task`, compare solvability and optimal cost
   between a plain Dijkstra over `sas_plus::State` and decoupled search.
-  Every check runs uniform-cost search and A* with `h^max` (and the
-  merge-and-shrink adapter, exact and size-limited, with the feature)
-  under all ten pruning configurations (five criteria, with and without
-  `fold_g`). Random tasks mostly have one causal-graph component, so the
+  Every check runs uniform-cost search, A* with `h^max` (and the
+  merge-and-shrink adapter, exact and size-limited, with the feature),
+  and anytime A* with each of those as the fork heuristic under a blind
+  root and `h^max` of the free-leaf task, in every optimal configuration
+  (six criteria with and without `fold_g`, and leaf reduction under
+  three). Heuristics on `Config::reduced_task` are cross-checked
+  separately: A\* with `h^max` against the optimum, GBFS with `h^FF` in
+  both leaf modes against solvability. Random tasks mostly have one causal-graph component, so the
   tests also run every seed under several explicit partitions and assert
   that enough solvable, nonzero-cost cases with at least two leaves were
   seen. Variants zero some operator costs, and add conditional effects and
@@ -500,8 +506,13 @@ Invalid tasks are rejected via `Task::validate`.
 Done since: simulation-based leaf reduction and the adaptive default;
 the factoring strategies, the leaf reduction and the dominance criteria
 checked against the papers (tables above), with the incident-arcs and
-independent-set strategies of Gnad, Poser and Hoffmann (2017).
-Open: LM-cut, an index for the dominance store, decoupled symbolic
+independent-set strategies of Gnad, Poser and Hoffmann (2017); X-shape
+factorings; sample-search selection (`Factoring::auto_by_sample`); anytime
+A\* (`Config::anytime_astar`); operator removal for heuristics
+(`Config::reduced_task`).
+Open: `inverted_fork` and `x_shape` may still split the inputs of a
+derived variable over two leaves (the search rejects those factorings and
+`auto` skips them); LM-cut, an index for the dominance store, decoupled symbolic
 search, decoupled partial-order reduction (strong stubborn sets), and
 multiple centers.
 

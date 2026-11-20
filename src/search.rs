@@ -836,6 +836,9 @@ impl Config {
     /// raise its estimates. Without leaf reduction in the search the
     /// estimates may exceed the true cost.
     ///
+    /// The result is the same for both [`Leaves`] modes: the simulation
+    /// and the removed transitions do not depend on it.
+    ///
     /// # Errors
     ///
     /// As [`Config::search`], except that [`Config::leaves`] is ignored.
