@@ -147,6 +147,76 @@ impl Factoring {
         )
     }
 
+    /// The X-shape factoring (Gnad, Hoffmann and Domshlak, `SoCS` 2015): the
+    /// fork factoring, plus every small source strongly connected component
+    /// of the rest of the causal graph that has no arc into a fork leaf.
+    ///
+    /// The paper runs the fork strategy and then the inverted-fork strategy
+    /// on the fork center, putting back into the center every inverted-fork
+    /// leaf with an arc into a fork leaf. Fork leaves have no outgoing arcs,
+    /// so the source components of the fork center are source components
+    /// of the whole causal graph. Every leaf then touches only the center:
+    /// fork leaves receive arcs from it, inverted-fork leaves send arcs to
+    /// it, so the result passes [`Factoring::check_star`]. Leaves keep the
+    /// [`MAX_LEAF_STATES`] bound of the other strategies.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use decoupled_search::Factoring;
+    /// use sas_plus::{Effect, Fact, Operator, State, Task, Variable};
+    ///
+    /// // A switch (0) enables a truck (1) that moves a package (2).
+    /// let op = |pre: Vec<Fact>, eff: Fact| Operator {
+    ///     name: "op".into(),
+    ///     pre,
+    ///     eff: vec![Effect::new(eff)],
+    ///     cost: 1,
+    /// };
+    /// let var = |name: &str| Variable::new(name, 2);
+    /// let task = Task {
+    ///     variables: vec![var("switch"), var("truck"), var("package")],
+    ///     operators: vec![
+    ///         op(vec![], Fact::new(0, 1)),
+    ///         op(vec![Fact::new(0, 1)], Fact::new(1, 1)),
+    ///         op(vec![Fact::new(1, 1)], Fact::new(2, 1)),
+    ///     ],
+    ///     initial: State(vec![0, 0, 0]),
+    ///     goal: vec![Fact::new(2, 1)],
+    ///     axioms: vec![],
+    /// };
+    ///
+    /// let factoring = Factoring::x_shape(&task);
+    /// assert_eq!(factoring.center(), &[1]);
+    /// assert_eq!(factoring.leaves(), &[vec![2], vec![0]]);
+    /// assert_eq!(factoring.check_star(&task), Ok(()));
+    /// ```
+    #[must_use]
+    pub fn x_shape(task: &Task) -> Self {
+        let n = task.num_variables();
+        let graph = CausalGraph::new(task);
+        let mut leaves: Vec<Vec<VarId>> = sink_components(n, |v| graph.successors(v))
+            .into_iter()
+            .filter(|c| leaf_states(task, c).is_some())
+            .collect();
+        let mut in_fork_leaf = vec![false; n];
+        for &v in leaves.iter().flatten() {
+            in_fork_leaf[v] = true;
+        }
+
+        let inverted = sink_components(n, |v| graph.predecessors(v))
+            .into_iter()
+            .filter(|c| c.iter().all(|&v| !in_fork_leaf[v]))
+            .filter(|c| leaf_states(task, c).is_some())
+            .filter(|c| {
+                c.iter()
+                    .all(|&v| graph.successors(v).iter().all(|&u| !in_fork_leaf[u]))
+            });
+        leaves.extend(inverted);
+
+        Self::from_leaves(task, leaves)
+    }
+
     /// A factoring whose leaves are the given disjoint, non-empty components
     /// that have at most [`MAX_LEAF_STATES`] states; larger components join
     /// the center.

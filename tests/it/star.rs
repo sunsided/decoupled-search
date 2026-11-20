@@ -136,10 +136,11 @@ fn pick_index(rng: &mut Rng, len: usize) -> usize {
 }
 
 /// The automatic factoring strategies, and the automatic choice among them.
-pub fn strategies(task: &Task) -> [(&'static str, Factoring); 5] {
+pub fn strategies(task: &Task) -> [(&'static str, Factoring); 6] {
     [
         ("fork", Factoring::fork(task)),
         ("inverted-fork", Factoring::inverted_fork(task)),
+        ("x-shape", Factoring::x_shape(task)),
         ("incident-arcs", Factoring::incident_arcs(task)),
         ("max-leaves", Factoring::max_leaves(task)),
         ("auto", Factoring::auto(task)),
@@ -406,4 +407,37 @@ fn strategies_keep_axiom_inputs_in_one_factor() {
             );
         }
     }
+}
+
+/// X-shape (Gnad, Hoffmann and Domshlak 2015): the source switch joins the
+/// fork leaves unless it has an arc into one of them.
+#[test]
+fn x_shape_adds_inverted_fork_leaves_apart_from_fork_leaves() {
+    let op = |pre: Vec<Fact>, eff: Fact| Operator {
+        name: "op".into(),
+        pre,
+        eff: vec![Effect::new(eff)],
+        cost: 1,
+    };
+    let mut task = Task {
+        variables: (0..3).map(|v| Variable::new(format!("v{v}"), 2)).collect(),
+        operators: vec![
+            op(vec![], Fact::new(0, 1)),
+            op(vec![Fact::new(0, 1)], Fact::new(1, 1)),
+            op(vec![Fact::new(1, 1)], Fact::new(2, 1)),
+        ],
+        initial: State(vec![0; 3]),
+        goal: vec![Fact::new(2, 1)],
+        axioms: vec![],
+    };
+    let factoring = Factoring::x_shape(&task);
+    assert_eq!(factoring.leaves(), &[vec![2], vec![0]]);
+    assert_eq!(checked_cost(&task, &factoring), Some(3));
+
+    // The switch now also enables the package: an arc into the fork leaf.
+    task.operators[2].pre.push(Fact::new(0, 1));
+    let factoring = Factoring::x_shape(&task);
+    assert_eq!(factoring.leaves(), &[vec![2]]);
+    assert_eq!(factoring.center(), &[0, 1]);
+    assert_eq!(checked_cost(&task, &factoring), Some(3));
 }

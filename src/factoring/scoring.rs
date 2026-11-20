@@ -32,6 +32,8 @@ pub enum Strategy {
     Fork,
     /// [`Factoring::inverted_fork`].
     InvertedFork,
+    /// [`Factoring::x_shape`].
+    XShape,
     /// [`Factoring::incident_arcs`].
     IncidentArcs,
     /// [`Factoring::max_leaves`], the independent-set strategy.
@@ -40,9 +42,10 @@ pub enum Strategy {
 
 impl Strategy {
     /// Every strategy, in the order [`Factoring::auto`] breaks ties by.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Fork,
         Self::InvertedFork,
+        Self::XShape,
         Self::IncidentArcs,
         Self::MaxLeaves,
     ];
@@ -171,6 +174,7 @@ impl Factoring {
         match strategy {
             Strategy::Fork => Self::fork(task),
             Strategy::InvertedFork => Self::inverted_fork(task),
+            Strategy::XShape => Self::x_shape(task),
             Strategy::IncidentArcs => Self::incident_arcs(task),
             Strategy::MaxLeaves => Self::max_leaves(task),
         }

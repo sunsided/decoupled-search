@@ -53,12 +53,16 @@ Strategies:
 3. **Inverted fork**, `Factoring::inverted_fork`. The fork strategy on the
    reversed causal graph: every small source SCC (no arcs entering it)
    becomes a leaf (the paper's refined inverted fork).
-4. **Incident arcs**, `Factoring::incident_arcs` (the paper's Figure 2).
+4. **X-shape**, `Factoring::x_shape` (Gnad, Hoffmann and Domshlak, SoCS
+   2015). The fork leaves, plus every small source SCC that has no arc
+   into a fork leaf (the inverted fork run on the fork center; fork leaves
+   have no outgoing arcs, so these are source SCCs of the whole graph).
+5. **Incident arcs**, `Factoring::incident_arcs` (the paper's Figure 2).
    Sort the variables by decreasing number of incident causal-graph arcs
    (in plus out), move them into the center one at a time, take the
    weakly connected components of the rest (within `2^16` states) as the
    leaves, and keep the candidate with the most mobile leaves.
-5. **Independent set**, `Factoring::max_leaves` (Figure 1). Seed one leaf
+6. **Independent set**, `Factoring::max_leaves` (Figure 1). Seed one leaf
    per variable of a maximum independent set of the causal graph, grow the
    leaves by variables adjacent to exactly one leaf (`maximizeFlexibility`),
    drop frozen leaves, grow again, and keep the result with the most mobile
@@ -94,7 +98,7 @@ sample searches instead; see the table.
 | Paper | Paper rule | Our code | Status |
 | --- | --- | --- | --- |
 | Sec. 3.3, fn. 1 | refined fork / inverted fork: leaves are the sink / source causal-graph SCCs | `fork`, `inverted_fork`, components over `2^16` states join the center | matches (leaf bound: see below) |
-| Sec. 3.3 | X-shape factorings | not implemented | open |
+| Sec. 3.3 (and Gnad, Hoffmann and Domshlak 2015) | X-shape: fork strategy, then inverted fork on the fork center; inverted-fork leaves with an arc into a fork leaf go back to the center | `x_shape`, on the refined fork and inverted fork | matches, with the refined (maximum-leaves) fork of footnote 1 instead of the 2015 greedy horizontal line |
 | Sec. 4 | leaf-size bound `2^32` states | `MAX_LEAF_STATES = 2^16` | deliberate deviation: leaf states are `u16` ranks |
 | Sec. 4.1 | mobile: flexibility (leaf-only actions over all actions affecting the leaf) above 0; frozen otherwise | at least one leaf action (`score`, and a cheap count the strategies use, asserted equal) | matches |
 | Fig. 2 | incident arcs: static order on the full causal graph, one candidate per center size 1 to the number of variables, max mobile leaves | same; ties: smaller variable, then smaller center | bug fixed: the order was recomputed per step from neighbours outside the center (distinct neighbours, not arcs), and the first candidate with two leaves (mobile or not) was taken; regression test `incident_arcs_keeps_the_most_mobile_leaves` |
@@ -467,7 +471,7 @@ Done since: simulation-based leaf reduction and the adaptive default;
 the factoring strategies, the leaf reduction and the dominance criteria
 checked against the papers (tables above), with the incident-arcs and
 independent-set strategies of Gnad, Poser and Hoffmann (2017).
-Open: X-shape factorings, sample-search ranking in `Factoring::auto`,
+Open: sample-search ranking in `Factoring::auto`,
 anytime decoupled A\* (ADA\*), LM-cut, an index for the dominance store,
 decoupled symbolic search, decoupled partial-order reduction (strong stubborn sets), and multiple
 centers.
@@ -499,6 +503,8 @@ centers.
 - Daniel Gnad and Jörg Hoffmann. *Star-Topology Decoupled State Space
   Search.* Artificial Intelligence 257 (2018), pp. 24–60.
   doi:10.1016/j.artint.2017.12.004.
+- Daniel Gnad, Jörg Hoffmann and Carmel Domshlak. *From Fork Decoupling
+  to Star-Topology Decoupling.* SoCS 2015.
 - Daniel Gnad, Valerie Poser and Jörg Hoffmann. *Beyond Forks: Finding and
   Ranking Star Factorings for Decoupled Search.* IJCAI 2017, pp. 4310–4316.
 - Álvaro Torralba, Daniel Gnad, Patrick Dubbert and Jörg Hoffmann. *On

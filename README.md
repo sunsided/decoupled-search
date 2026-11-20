@@ -7,7 +7,7 @@ Decoupled search for factored SAS+ planning: center and leaf factoring, leaf rea
 Pre-release. The API will change. Implemented (see
 [docs/design.md](docs/design.md)):
 
-- Factorings: fork, inverted fork, and the incident-arcs and
+- Factorings: fork, inverted fork, X-shape, and the incident-arcs and
   independent-set (maximum leaves) strict-star strategies of Gnad, Poser
   and Hoffmann (IJCAI 2017), explicit partitions, and a strict-star check.
   `Factoring::score` reports leaves, mobile leaves, the leaf-action share
