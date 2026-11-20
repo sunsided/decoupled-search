@@ -399,30 +399,34 @@ adds the largest seed price its relaxed plan starts from, our own choice
 rather than `h^FF` on `Π^L$`; it is not admissible either way. Their root estimate
 (Definition 6) is `Factoring::with_free_leaf_actions`.
 
-- `LmCutHeuristic` (feature `lm-cut`) runs `planning_heuristics::LmCut`
-  on `Π^L$` at the fact level. `LmCut` evaluates explicit states only and
-  takes no seeded fact costs, so each estimate builds a task with one
-  binary variable per original fact (LM-cut works on the delete
-  relaxation, where this loses nothing): facts at price 0 and derived
-  defaults hold initially, operators keep costs and conditional effects,
-  axioms become 0-cost operators, and per factor and positive price level
-  `p` one purchase operator of cost `p` sets every fact of the factor
-  priced at most `p`. Admissible: a completion through member state `m`
-  buys each leaf state `x_L` at `P_L`, and the purchase at level `P_L`
-  covers every fact of `x_L` (each is priced at most `P_L`), so the
-  relaxed task has a plan no dearer than the completion. A unit test
-  checks it against the cheapest member state plus `h*` and against
-  `h^max` (never below, sometimes above). The price: a task and an
-  `LmCut` per evaluation (on gripper, A\* with it took 1.4x to 2x the
-  time of A\* with `h^max` on a loaded machine).
-- `planning-heuristics` would avoid the rebuild with an `LmCut`
-  evaluation from seeded fact costs (or per-call operator costs) on a
-  prebuilt relaxation; `h_max_under` exists but is crate-private.
+- `LmCutHeuristic` (feature `lm-cut`) wraps `planning_heuristics::LmCut`
+  in two admissible ways (proofs on the type):
+  - `LmCutHeuristic::new`, *seeded* (the default): one `LmCut` built on
+    the task, evaluated per state with `LmCut::value_seeded`, whose seeds
+    add up over the facts a plan uses. Seeding every fact with its fact
+    price would pay a multi-variable leaf state's price once per variable
+    and overestimate (unit test `a_leaf_state_is_paid_once`). So in each
+    factor one representative variable (most expensive goal fact, then
+    most expensive fact) keeps its facts' prices and the others are seeded
+    at 0: the shares of a leaf state's facts sum to at most its price. The
+    estimate is the maximum with `HMax`, which charges a leaf state once.
+  - `LmCutHeuristic::with_price_levels`: `Π^L$` at the fact level with one
+    purchase operator per factor and price level, rebuilt per estimate
+    (a task and an `LmCut` each time). It charges a multi-variable leaf
+    state's price once for all its facts, so it can be stronger there.
+  - Neither dominates the other. A brute-force unit test checks both
+    against the cheapest member state plus `h*`, and against `h^max`.
+    Gripper, A\* under the fork factoring, criterion `--quick` on a
+    loaded machine: `h^max` 67 µs, seeded LM-cut 78 µs, price levels
+    124 µs.
+  - A prebuilt exact `Π^L$` (one purchase per leaf state, seeded with the
+    leaf-state prices) would need the reached leaf states and their prices
+    in `FactPrices` and the factoring at construction; not done.
 - Leaf reduction and LM-cut (`Config::reduced_task`): on random tasks
   where reduction removes operators, A\* under leaf reduction with LM-cut
   of the reduced task expands fewer states in total than with LM-cut of
-  the full task (149 against 155 over the test's 60 seeds, never more in
-  that run), at the same cost. On the Logistics example there is no gain:
+  the full task (seeded LM-cut: 150 against 158 over the test's 60 seeds,
+  8 instances better), at the same cost. On the Logistics example there is no gain:
   LM-cut is already perfect (3) and the removed operators give the delete
   relaxation no shortcut; the report's gain is in Logistics98, with
   airplanes and airports, which we have no fixture for.
@@ -561,10 +565,9 @@ multiple centers.
   `build`, with label reduction, instead of re-running the merge loop from
   the public parts (including a copy of its private `shrink_sizes`).
 - `planning-heuristics`: `HMax` and `HFf` here run their own relaxed
-  exploration, and `LmCutHeuristic` rebuilds a task and an `LmCut` per
-  estimate. If that crate offers `h^max`/`h^add` and `LmCut` seeded with
-  per-fact initial costs (or `LmCut` with per-call operator costs), these
-  could delegate to it without the rebuild.
+  exploration; `h_max_seeded` sums seeds, while `HMax` takes the maximum
+  per factor, so they are not interchangeable. `LmCutHeuristic::new` uses
+  `LmCut::value_seeded` (needs `planning-heuristics` at 9f2fbc4 or later).
 
 ## References
 

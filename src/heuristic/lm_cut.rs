@@ -1,60 +1,72 @@
 //! The landmark-cut heuristic on decoupled states, from the
 //! [`planning_heuristics`] crate (feature `lm-cut`). See [`LmCutHeuristic`]
-//! for the encoding and its admissibility proof.
+//! for the two evaluations and their admissibility proofs.
 
-use alloc::format;
+mod levels;
+
+use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::cell::RefCell;
+use core::cmp::Reverse;
 
 use planning_heuristics::LmCut;
-use sas_plus::{Effect, Fact, Operator, State, Task, Variable};
+use sas_plus::{Fact, Task, VarId};
 
-use super::{DecoupledHeuristic, FactPrices, fact_offsets};
+use super::{DecoupledHeuristic, FactPrices, HMax, fact_offsets};
+use levels::Levels;
 
-/// `h^LM-cut` (Helmert and Domshlak 2009) on decoupled states, computed by
-/// [`planning_heuristics::LmCut`] on a fact-level encoding seeded with the
-/// fact prices.
+/// `h^LM-cut` (Helmert and Domshlak 2009) on decoupled states, from
+/// [`planning_heuristics::LmCut`].
 ///
-/// `LmCut` only evaluates explicit states and has no seeded fact costs, so
-/// each estimate builds a task in which every fact `(v, d)` of the original
-/// task is a binary variable (LM-cut works on the delete relaxation, where
-/// this loses nothing), and:
+/// # Seeded evaluation ([`LmCutHeuristic::new`])
 ///
-/// - facts at price 0 and the default values of derived variables (as in
-///   [`crate::HMax`]) are true initially, everything else false;
-/// - every operator keeps its cost, preconditions and (conditional)
-///   effects on the binary variables; every axiom becomes a 0-cost operator;
-/// - per factor (each leaf, and the center) and per positive price level
-///   `p` of its facts, one *purchase* operator of cost `p` makes every fact
-///   of that factor with price at most `p` true.
+/// `LmCut` is built once on the task. Each estimate seeds every fact with
+/// a finite price with a *share* of it ([`LmCut::value_seeded`]: a seeded
+/// fact is available at the start for its seed, and seeds add up over the
+/// facts a plan uses), and returns the larger of that and [`HMax`]:
 ///
-/// This is Gnad and Hoffmann's `Π^L$` (ICAPS 2015, Definition 5) at the
-/// fact level: instead of one action per reached leaf state, one per price
-/// level, which needs only [`FactPrices`].
+/// - in every factor (each leaf, and the center), one *representative*
+///   variable keeps the full price of its facts, every other variable's
+///   facts are seeded at 0. The representative is the variable with the
+///   most expensive goal fact, else the most expensive fact, the smallest
+///   variable on ties; any choice is sound;
+/// - facts without a price are not seeded.
 ///
-/// *Admissibility.* Take any completion of the decoupled state through a
-/// member state `m` that buys leaf state `x_L` at price `P_L`, followed by a
-/// plan `π` from `m`. Every fact of `x_L` has a fact price of at most `P_L`,
-/// so the purchase at level `P_L` (or the initial state, if `P_L = 0`) makes
-/// all of them true; the derived facts of `m` follow from 0-cost axiom
-/// operators or are defaults, and `π` is then applicable in the delete
-/// relaxation. So the relaxed task has a plan of cost at most
-/// `Σ_L P_L + cost(π)`, and `h^LM-cut <= h^+` of it. Buying more than one
-/// level, or facts no member state has together, only adds options.
-/// Prices above `u32::MAX` are capped, which only lowers the estimate.
+/// *Admissibility.* `value_seeded` never exceeds the minimum, over full
+/// states `s` with every fact seeded, of `Σ_v seed(s[v]) + h*(s)`. A member
+/// state `m` of the decoupled state buys leaf state `x_L` at price `P_L`;
+/// each fact of `x_L` (attached derived ones included) is priced at most
+/// `P_L`, so it is seeded, and the shares of `x_L`'s facts sum to the price
+/// of its representative fact, at most `P_L`. Center facts of `m` are
+/// priced 0. So `m` is such a state with `Σ_v seed(m[v]) <= Σ_L P_L`, and the
+/// estimate is at most `Σ_L P_L + h*(m)`, the cost of the cheapest
+/// completion through `m`. [`HMax`] is admissible on its own, so is the
+/// maximum. Seeding every fact at its full price instead would pay a leaf
+/// state's price once per variable and could overestimate.
 ///
-/// *Cost.* Each estimate builds the encoding and a fresh `LmCut`, `O(size of
-/// the task + facts)`; [`crate::HMax`] is far cheaper. `planning-heuristics`
-/// would avoid the rebuild with an evaluation from seeded fact costs (or
-/// per-call operator costs) on a prebuilt relaxation.
+/// For single-variable leaves the shares are the prices themselves. For
+/// leaves with several variables they keep only the representative's part;
+/// the `h^max` term keeps the joint price (it charges a leaf state once).
+///
+/// # Price-level evaluation ([`LmCutHeuristic::with_price_levels`])
+///
+/// Gnad and Hoffmann's `Π^L$` (ICAPS 2015, Definition 5) at the fact level,
+/// rebuilt for every estimate: one binary variable per fact, and per factor
+/// and price level `p` an operator of cost `p` that buys every fact of the
+/// factor priced at most `p`. It charges a multi-variable leaf state's
+/// price once for all its facts, but builds a task and an `LmCut` per
+/// estimate. Its proof is in the `levels` module docs.
+///
+/// Both are admissible; neither dominates the other in general.
 ///
 /// # Examples
 ///
 /// ```
-/// use decoupled_search::{Factoring, HMax, LmCutHeuristic, astar};
+/// use decoupled_search::{Factoring, LmCutHeuristic, astar};
 /// use sas_plus::{Effect, Fact, Operator, State, Task, Variable};
 ///
-/// // Two independent switches: h^max sees one of them, LM-cut both.
+/// // Two goals behind one switch: h^max sees one of them, LM-cut both.
 /// let set = |var| Operator {
 ///     name: "set".into(),
 ///     pre: vec![],
@@ -74,135 +86,183 @@ use super::{DecoupledHeuristic, FactPrices, fact_offsets};
 /// };
 ///
 /// let factoring = Factoring::fork(&task);
-/// let plan = astar(&task, &factoring, &LmCutHeuristic::new(&task))?;
-/// assert_eq!(plan.map(|p| p.cost), Some(6));
+/// for h in [LmCutHeuristic::new(&task), LmCutHeuristic::with_price_levels(&task)] {
+///     assert_eq!(astar(&task, &factoring, &h)?.map(|p| p.cost), Some(6));
+/// }
 /// # Ok::<(), decoupled_search::Error>(())
 /// ```
 #[derive(Clone, Debug)]
-pub struct LmCutHeuristic {
-    /// The fact-level encoding without its initial state and purchases.
-    template: Task,
-    /// Index of each original variable's first fact, plus a final entry
-    /// with the number of facts.
+pub struct LmCutHeuristic(Mode);
+
+/// How [`LmCutHeuristic`] evaluates.
+#[derive(Clone, Debug)]
+enum Mode {
+    /// Shares of the prices as seeds of one prebuilt `LmCut`.
+    Seeded(Box<Seeded>),
+    /// The price-level encoding, rebuilt per estimate.
+    Levels(Levels),
+}
+
+/// How a variable ranks as its factor's representative, greater is better:
+/// its goal fact's price, its most expensive priced fact, the smaller
+/// variable.
+type RepresentativeKey = (u64, u64, Reverse<VarId>);
+
+/// The prebuilt state of the seeded evaluation.
+#[derive(Clone, Debug)]
+struct Seeded {
+    /// `LmCut` on the task and the seed buffer, reused across estimates
+    /// (`LmCut` needs `&mut` to evaluate).
+    lm_cut: RefCell<(LmCut<'static>, Vec<Option<u64>>)>,
+    /// `h^max` on fact prices, the other half of the maximum.
+    h_max: HMax,
+    /// Index of each variable's first fact in [`FactPrices`], plus a final
+    /// entry with the number of facts.
     offsets: Vec<usize>,
-    /// The facts true regardless of prices: the default values of derived
-    /// variables.
-    defaults: Vec<usize>,
+    /// Per fact (by [`Seeded::offsets`]), its id in the `LmCut` relaxation.
+    ids: Vec<usize>,
+    /// Per variable, the goal value, if the goal has one.
+    goal: Vec<Option<usize>>,
 }
 
 impl LmCutHeuristic {
-    /// The encoding of `task` (see [`LmCutHeuristic`]).
+    /// The seeded evaluation on `task` (see [`LmCutHeuristic`]): `LmCut` is
+    /// built once, each estimate only seeds it.
     ///
     /// # Panics
     ///
-    /// Panics if `task` has a fact value outside its variable's domain
-    /// that does not fit `usize` (never for a validated task).
+    /// Panics if a goal fact's value does not fit `usize`.
     #[must_use]
     pub fn new(task: &Task) -> Self {
+        let lm_cut = LmCut::new(task);
         let offsets = fact_offsets(task);
-        let id = |f: &Fact| offsets[f.var] + usize::try_from(f.value).expect("value fits usize");
-        let binary = |f: &Fact| Fact::new(id(f), 1);
-        let facts = *offsets.last().expect("has a final entry");
-
-        let mut operators: Vec<Operator> = task
-            .operators
-            .iter()
-            .map(|op| Operator {
-                name: op.name.clone(),
-                pre: op.pre.iter().map(binary).collect(),
-                eff: op
-                    .eff
-                    .iter()
-                    .map(|e| Effect {
-                        conditions: e.conditions.iter().map(binary).collect(),
-                        fact: binary(&e.fact),
-                    })
-                    .collect(),
-                cost: op.cost,
+        let ids = (0..task.num_variables())
+            .flat_map(|var| {
+                let domain = task.variables[var].domain_size;
+                let relaxation = lm_cut.relaxation();
+                (0..domain).map(move |value| relaxation.fact_id(Fact::new(var, value)))
             })
             .collect();
-        operators.extend(task.axioms.iter().map(|axiom| Operator {
-            name: "axiom".into(),
-            pre: axiom.conditions.iter().map(binary).collect(),
-            eff: vec![Effect::new(binary(&axiom.head))],
-            cost: 0,
-        }));
-
-        let defaults = (0..task.num_variables())
-            .filter(|&v| task.variables[v].is_derived())
-            .map(|v| id(&Fact::new(v, task.initial.0[v])))
-            .collect();
-        let template = Task {
-            variables: (0..facts)
-                .map(|f| Variable::new(format!("f{f}"), 2))
-                .collect(),
-            operators,
-            initial: State(vec![0; facts]),
-            goal: task.goal.iter().map(binary).collect(),
-            axioms: vec![],
-        };
-
-        Self {
-            template,
-            offsets,
-            defaults,
+        let mut goal = vec![None; task.num_variables()];
+        for fact in &task.goal {
+            goal[fact.var] = Some(usize::try_from(fact.value).expect("value fits usize"));
         }
+
+        Self(Mode::Seeded(Box::new(Seeded {
+            lm_cut: RefCell::new((lm_cut, Vec::new())),
+            h_max: HMax::new(task),
+            offsets,
+            ids,
+            goal,
+        })))
     }
 
-    /// The encoding seeded with `facts`: initial state and purchases.
-    fn seeded(&self, facts: &FactPrices<'_>) -> Task {
-        let mut task = self.template.clone();
-        for &f in &self.defaults {
-            task.initial.0[f] = 1;
-        }
+    /// The price-level evaluation on `task` (see [`LmCutHeuristic`]): a
+    /// task and an `LmCut` per estimate, charging each leaf state's price
+    /// once for all its facts.
+    #[must_use]
+    pub fn with_price_levels(task: &Task) -> Self {
+        Self(Mode::Levels(Levels::new(task)))
+    }
+}
 
-        // Per factor (`None` is the center): its priced facts.
-        let mut priced: Vec<(Option<usize>, u64, usize)> = Vec::new();
+impl Seeded {
+    /// The estimate: the larger of seeded LM-cut and `h^max`; `None` if
+    /// either declares a dead end.
+    fn estimate(&self, facts: &FactPrices<'_>) -> Option<u64> {
+        let h_max = self.h_max.estimate(facts)?;
+        let representatives = self.representatives(facts);
+
+        let mut guard = self.lm_cut.borrow_mut();
+        let (lm_cut, seeds) = &mut *guard;
+        seeds.clear();
+        seeds.resize(lm_cut.relaxation().num_facts(), None);
         for var in 0..self.offsets.len() - 1 {
+            let full = representatives.contains(&(facts.leaf_of(var), var));
             for f in self.offsets[var]..self.offsets[var + 1] {
-                match facts.prices[f] {
-                    0 => task.initial.0[f] = 1,
-                    u64::MAX => {}
-                    price => priced.push((facts.leaf_of(var), price, f)),
+                let price = facts.prices[f];
+                if price != u64::MAX {
+                    seeds[self.ids[f]] = Some(if full { price } else { 0 });
                 }
             }
         }
 
-        priced.sort_unstable();
-        let mut start = 0;
-        while start < priced.len() {
-            let (factor, price, _) = priced[start];
-            let mut end = start;
-            while end < priced.len() && priced[end].0 == factor && priced[end].1 == price {
-                end += 1;
-            }
+        let lm = lm_cut.value_seeded(seeds, None)?;
+        Some(lm.max(h_max))
+    }
 
-            let first = priced.partition_point(|&(other, ..)| other < factor);
-            task.operators.push(purchase(&priced[first..end], price));
-            start = end;
+    /// Per factor (`None` is the center), its representative variable:
+    /// the most expensive goal fact first, then the most expensive priced
+    /// fact, then the smaller variable.
+    fn representatives(&self, facts: &FactPrices<'_>) -> Vec<(Option<usize>, VarId)> {
+        let mut best: Vec<(Option<usize>, RepresentativeKey)> = Vec::new();
+        for var in 0..self.offsets.len() - 1 {
+            let priced = |f: usize| Some(facts.prices[f]).filter(|&p| p != u64::MAX);
+            let range = self.offsets[var]..self.offsets[var + 1];
+            let most = range.clone().filter_map(priced).max().unwrap_or(0);
+            let goal = self.goal[var]
+                .and_then(|value| priced(self.offsets[var] + value))
+                .unwrap_or(0);
+            let key = (goal, most, Reverse(var));
+            let factor = facts.leaf_of(var);
+            match best.iter_mut().find(|(f, _)| *f == factor) {
+                Some((_, current)) if *current < key => *current = key,
+                Some(_) => {}
+                None => best.push((factor, key)),
+            }
         }
 
-        task
-    }
-}
-
-/// The purchase of every fact in `facts` (one factor's facts up to and
-/// including price level `price`) at cost `price`, capped to `u32::MAX`.
-fn purchase(facts: &[(Option<usize>, u64, usize)], price: u64) -> Operator {
-    Operator {
-        name: "purchase".into(),
-        pre: vec![],
-        eff: facts
-            .iter()
-            .map(|&(_, _, f)| Effect::new(Fact::new(f, 1)))
-            .collect(),
-        cost: u32::try_from(price).unwrap_or(u32::MAX),
+        best.into_iter()
+            .map(|(factor, (_, _, Reverse(var)))| (factor, var))
+            .collect()
     }
 }
 
 impl DecoupledHeuristic for LmCutHeuristic {
     fn estimate(&self, facts: &FactPrices<'_>) -> Option<u64> {
-        let task = self.seeded(facts);
-        LmCut::new(&task).value(&task.initial)
+        match &self.0 {
+            Mode::Seeded(seeded) => seeded.estimate(facts),
+            Mode::Levels(levels) => levels.estimate(facts),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use sas_plus::{Effect, Operator, State, Variable};
+
+    use super::*;
+    use crate::Factoring;
+
+    /// One leaf of two variables, both goals, reached together in one leaf
+    /// state at price 5: the cheapest completion costs 5. Seeding both
+    /// facts at their full price would charge 10; the shares charge 5.
+    #[test]
+    fn a_leaf_state_is_paid_once() {
+        let set = |var| Operator {
+            name: "set".into(),
+            pre: vec![],
+            eff: vec![Effect::new(Fact::new(var, 1))],
+            cost: 5,
+        };
+        let task = Task {
+            variables: vec![Variable::new("x", 2), Variable::new("y", 2)],
+            operators: vec![set(0), set(1)],
+            initial: State(vec![0, 0]),
+            goal: vec![Fact::new(0, 1), Fact::new(1, 1)],
+            axioms: vec![],
+        };
+        let leaf = Factoring::new(&task, vec![vec![0, 1]]).expect("valid");
+        let prices = FactPrices::new(&task, &leaf, |f| Some(if f.value == 1 { 5 } else { 0 }))
+            .expect("valid");
+
+        for h in [
+            LmCutHeuristic::new(&task),
+            LmCutHeuristic::with_price_levels(&task),
+        ] {
+            assert_eq!(h.estimate(&prices), Some(5));
+        }
     }
 }
