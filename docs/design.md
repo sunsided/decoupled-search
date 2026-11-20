@@ -154,8 +154,8 @@ plus predecessor). Leaf paths are recomputed only for the solution:
    stage 1 leaf actions, and so on. Leaf actions of different leaves within a
    stage commute, since each reads only the fixed center and its own leaf.
 
-The plan cost equals the reported solution cost; tests check that with
-`Task::validate_plan`.
+The plan cost equals the reported solution cost; tests check that with a
+test-local validator that applies operators fact by fact.
 
 ## Heuristic interface
 

@@ -150,9 +150,10 @@ impl Factoring {
     /// through the center.
     ///
     /// Search does not require this, since an operator that couples two
-    /// leaves becomes a global action. A star factoring guarantees that every
-    /// operator touches at most one leaf, which keeps global actions cheap
-    /// and the leaves independent. All strategies of this type except
+    /// leaves becomes a global action. In a star factoring no operator writes
+    /// one leaf while reading or writing another, which keeps the leaves
+    /// independent. An operator may still read several leaves and write only
+    /// the center. All strategies of this type except
     /// [`Factoring::new`] produce star factorings.
     ///
     /// # Errors

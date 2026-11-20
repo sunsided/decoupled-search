@@ -1,7 +1,7 @@
 //! A task whose prices grow forever along a center loop, so only dominance
 //! pruning makes the search terminate.
 
-use decoupled_search::Factoring;
+use decoupled_search::{DecoupledHeuristic, FactPrices, Factoring, astar, gbfs};
 use sas_plus::{Effect, Fact, Operator, State, Task, Variable};
 
 use crate::checked_cost;
@@ -60,6 +60,19 @@ fn growing_prices_terminate_on_unsolvable_task() {
 
     let factoring = Factoring::new(&task, vec![vec![1]]).expect("valid");
     assert_eq!(checked_cost(&task, &factoring), None);
+
+    // h^max prunes the root here, so a blind heuristic exercises dominance.
+    assert_eq!(astar(&task, &factoring, &Blind), Ok(None));
+    assert_eq!(gbfs(&task, &factoring, &Blind), Ok(None));
+}
+
+/// The zero heuristic, which never prunes.
+struct Blind;
+
+impl DecoupledHeuristic for Blind {
+    fn estimate(&self, _: &FactPrices<'_>) -> Option<u64> {
+        Some(0)
+    }
 }
 
 /// The same loop with a reachable goal still yields an optimal plan.

@@ -46,8 +46,9 @@ pub use factoring::Factoring;
 pub use heuristic::{DecoupledHeuristic, FactPrices, HFf, HMax};
 pub use search::{astar, gbfs, search};
 
-/// The largest number of states a leaf may have; prices are stored densely
-/// per leaf state.
+/// The largest number of states a leaf may have. Leaf reachability works on
+/// dense price vectors of this size, and stored leaf-state ranks fit in
+/// `u16`.
 pub const MAX_LEAF_STATES: usize = 1 << 16;
 
 /// A sequential plan for the original task.
