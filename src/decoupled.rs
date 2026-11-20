@@ -25,6 +25,7 @@ use sas_plus::{Fact, OpId, Task, Value, VarId};
 use crate::heuristic::FactPrices;
 use crate::{Error, Factoring};
 use axioms::{Axioms, Scope};
+pub(crate) use compile::{leaf_action_of, mobile_leaves};
 pub(crate) use leaf::{Leaf, LeafAction, LeafFact, LeafPart, Price, UNREACHED, View};
 pub(crate) use prices::Prices;
 

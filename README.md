@@ -7,10 +7,12 @@ Decoupled search for factored SAS+ planning: center and leaf factoring, leaf rea
 Pre-release. The API will change. Implemented (see
 [docs/design.md](docs/design.md)):
 
-- Factorings: fork, inverted fork, greedy incident-arcs and maximum-leaves
-  star factorings, explicit partitions, and a strict-star check.
+- Factorings: fork, inverted fork, and the incident-arcs and
+  independent-set (maximum leaves) strict-star strategies of Gnad, Poser
+  and Hoffmann (IJCAI 2017), explicit partitions, and a strict-star check.
   `Factoring::score` reports leaves, mobile leaves, the leaf-action share
-  and leaf sizes; `Factoring::auto` picks the best-scored strategy.
+  and leaf sizes; `Factoring::auto` picks the best-scored strategy with at
+  least two mobile leaves and otherwise falls back to explicit search.
 - Leaf reachability with prices (cheapest cost per leaf state along the
   center path); stored states keep only reached leaf states, as `u16` ranks
   with `u64` prices (no prices at all when all are 0).
@@ -20,7 +22,9 @@ Pre-release. The API will change. Implemented (see
   Gnad, Dubbert and Hoffmann 2016, generalised to global actions that touch
   leaves), optionally with one `g` budget shared by all leaves; the
   default switches to simulation only once the search has spent its cost.
-  Optional simulation-based leaf reduction (`Config::reduce_leaves`).
+  Optional simulation-based leaf reduction (`Config::reduce_leaves`, the
+  superfluous-transition rule of the paper's technical report with a
+  removal order that keeps it sound).
   Search statistics come with every `Outcome`.
 - Reachability-only leaves (no prices) for GBFS.
 - Conditional effects on a leaf conditioned on the center and that leaf,

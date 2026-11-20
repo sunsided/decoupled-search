@@ -11,7 +11,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use sas_plus::{Effect, Fact, OpId, Task, VarId};
+use sas_plus::{Effect, Fact, OpId, Operator, Task, VarId};
 
 use super::axioms::Axioms;
 use super::leaf::LeafEffect;
@@ -127,6 +127,56 @@ pub(super) fn compile(task: &Task, factoring: &Factoring) -> Result<DecoupledTas
         globals,
         reachability_only: false,
     })
+}
+
+/// Per leaf of `factoring`, whether it has at least one leaf action (is
+/// *mobile*), classifying operators as [`compile`] does but without
+/// compiling the leaves.
+///
+/// Whenever [`compile`] accepts `factoring`, this says which of its leaves
+/// have actions. Operators that [`compile`] would reject (effect
+/// conditions across factors) are classified by their facts alone.
+///
+/// # Errors
+///
+/// As [`ownership`].
+pub(crate) fn mobile_leaves(task: &Task, factoring: &Factoring) -> Result<Vec<bool>, Error> {
+    let owners = ownership(task, factoring)?.owners;
+    let mut mobile = vec![false; factoring.leaves().len()];
+    for operator in &task.operators {
+        if let Some(leaf) = leaf_action_of(|v| owners[v].leaf(), operator) {
+            mobile[leaf] = true;
+        }
+    }
+
+    Ok(mobile)
+}
+
+/// The leaf `operator` is a leaf action of, given the leaf of every task
+/// variable (`None` for the center), as [`leaf_action_owner`] decides on
+/// split facts: it sets something and nothing in the center, and every
+/// variable it reads or writes lies in the center or in one leaf.
+pub(crate) fn leaf_action_of(
+    leaf_of: impl Fn(VarId) -> Option<usize>,
+    operator: &Operator,
+) -> Option<usize> {
+    if operator.eff.is_empty() || operator.eff.iter().any(|e| leaf_of(e.fact.var).is_none()) {
+        return None;
+    }
+
+    let conditions = operator.eff.iter().flat_map(|e| &e.conditions);
+    let facts = operator.pre.iter().chain(conditions);
+    let vars = facts
+        .map(|f| f.var)
+        .chain(operator.eff.iter().map(|e| e.fact.var));
+    let mut leaf = None;
+    for owner in vars.filter_map(&leaf_of) {
+        if *leaf.get_or_insert(owner) != owner {
+            return None;
+        }
+    }
+
+    leaf
 }
 
 /// The owner of every task variable: the factoring's leaves own their

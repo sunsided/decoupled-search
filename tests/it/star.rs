@@ -230,10 +230,10 @@ fn star_check_rejects_coupled_leaves() {
     );
 }
 
-/// `auto` picks a strategy's factoring whose score is the best of all
-/// strategies: on star tasks it always finds two mobile leaves, and it
-/// never picks a factoring with a lower leaf-action share among those with
-/// as many (capped at two) mobile leaves.
+/// `auto` picks a strategy's factoring with at least two mobile leaves
+/// whose leaf-action share is the best of all such strategies, and
+/// abstains (no leaves) only if no strategy has two mobile leaves; on star
+/// tasks it mostly finds two.
 #[test]
 fn auto_picks_the_best_scored_strategy() {
     let mut two_mobile = 0;
@@ -243,34 +243,100 @@ fn auto_picks_the_best_scored_strategy() {
         let score = auto.score(&task).expect("searchable");
         let candidates: Vec<_> = Strategy::ALL
             .iter()
-            .map(|&s| Factoring::with_strategy(&task, s))
+            .filter_map(|&s| {
+                let factoring = Factoring::with_strategy(&task, s);
+                let score = factoring.score(&task).ok()?;
+                Some((factoring, score))
+            })
+            .filter(|(_, score)| score.mobile_leaves >= 2)
             .collect();
-        assert!(
-            candidates.contains(&auto) || auto.leaves().is_empty(),
-            "seed {seed}: {auto:?}"
-        );
-        for candidate in &candidates {
-            let other = candidate.score(&task).expect("searchable");
-            let tier = |mobile: usize| mobile.min(2);
-            assert!(
-                tier(other.mobile_leaves) <= tier(score.mobile_leaves),
-                "seed {seed}"
-            );
-            if tier(other.mobile_leaves) == tier(score.mobile_leaves) {
-                assert!(
-                    other.leaf_action_share() <= score.leaf_action_share(),
-                    "seed {seed}: {other:?} beats {score:?}"
-                );
-            }
+        if auto.leaves().is_empty() {
+            assert!(candidates.is_empty(), "seed {seed}: abstained");
+            continue;
         }
 
-        two_mobile += u64::from(score.mobile_leaves >= 2);
+        assert!(score.mobile_leaves >= 2, "seed {seed}: {score:?}");
+        assert!(
+            candidates.iter().any(|(f, _)| *f == auto),
+            "seed {seed}: {auto:?}"
+        );
+        for (_, other) in &candidates {
+            assert!(
+                other.leaf_action_share() <= score.leaf_action_share(),
+                "seed {seed}: {other:?} beats {score:?}"
+            );
+        }
+
+        two_mobile += 1;
     }
 
     assert!(
         two_mobile > SEEDS / 2,
         "only {two_mobile} with two mobile leaves"
     );
+}
+
+/// A truck `t` (0) that drives freely, packages `b` (2) and `d` (4) moved
+/// by leaf actions that read `t` or `a` (1), `a` moved by the truck and
+/// moving `b`, and `c` (3) moved only together with the truck.
+///
+/// Causal graph: `t -> a, b, c`, `c -> t`, `a -> b, d`. Incident arcs:
+/// `t` 4, `a` 3, `b` 2, `c` 2, `d` 1.
+fn truck_with_frozen_passenger() -> Task {
+    let op = |pre: Vec<Fact>, eff: Vec<Fact>| Operator {
+        name: "op".into(),
+        pre,
+        eff: eff.into_iter().map(Effect::new).collect(),
+        cost: 1,
+    };
+    Task {
+        variables: (0..5).map(|v| Variable::new(format!("v{v}"), 2)).collect(),
+        operators: vec![
+            op(vec![], vec![Fact::new(0, 1)]),
+            op(vec![Fact::new(0, 0)], vec![Fact::new(1, 1)]),
+            op(vec![Fact::new(0, 0)], vec![Fact::new(2, 1)]),
+            op(vec![Fact::new(1, 1)], vec![Fact::new(2, 0)]),
+            op(vec![], vec![Fact::new(0, 0), Fact::new(3, 1)]),
+            op(vec![Fact::new(1, 1)], vec![Fact::new(4, 1)]),
+        ],
+        initial: State(vec![0; 5]),
+        goal: vec![Fact::new(2, 1), Fact::new(3, 1), Fact::new(4, 1)],
+        axioms: vec![],
+    }
+}
+
+/// Incident arcs (Figure 2 of Gnad, Poser and Hoffmann 2017): center `{t}`
+/// leaves `{a, b, d}` (mobile) and `{c}` (frozen), one mobile leaf; center
+/// `{t, a}` leaves `{b}`, `{c}` and `{d}`, two mobile. The strategy keeps
+/// the latter; taking the first candidate with two leaves would not.
+#[test]
+fn incident_arcs_keeps_the_most_mobile_leaves() {
+    let task = truck_with_frozen_passenger();
+    let factoring = Factoring::incident_arcs(&task);
+    assert_eq!(factoring.center(), &[0, 1]);
+    assert_eq!(factoring.leaves(), &[vec![2], vec![3], vec![4]]);
+    assert_eq!(factoring.score(&task).expect("searchable").mobile_leaves, 2);
+    assert_eq!(checked_cost(&task, &factoring), optimal_cost(&task));
+}
+
+/// Independent sets (Figure 1): the only maximum independent set is
+/// `{b, c, d}`. Growing cannot add `t` (adjacent to `b` and `c`) or `a`
+/// (adjacent to `b` and `d`); the frozen `{c}` goes back to the center;
+/// growing again adds `t` to `{b}` (now its only neighbouring leaf), which
+/// keeps two mobile leaves, and then `c`, whose only neighbour is `t`.
+#[test]
+fn max_leaves_grows_the_independent_set() {
+    let task = truck_with_frozen_passenger();
+    let factoring = Factoring::max_leaves(&task);
+    assert_eq!(factoring.center(), &[1]);
+    assert_eq!(factoring.leaves(), &[vec![0, 2, 3], vec![4]]);
+    let score = factoring.score(&task).expect("searchable");
+    assert_eq!((score.mobile_leaves, score.leaf_actions), (2, 5));
+    assert_eq!(checked_cost(&task, &factoring), optimal_cost(&task));
+
+    // The fork (leaves b, d) has three leaf actions and the inverted fork
+    // one mobile leaf ({t, c}); five of six wins.
+    assert_eq!(Factoring::auto(&task), factoring);
 }
 
 /// A task where no strategy finds a mobile leaf gets the factoring without

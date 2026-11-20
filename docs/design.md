@@ -26,16 +26,24 @@ The classification above is our own formulation. It makes every variable
 partition a valid factoring: an operator that would break the star topology
 (for example one that reads leaf `L1` and writes leaf `L2`) becomes a global
 action, so it is searched explicitly instead of being priced. The factoring
-therefore only affects performance, never soundness or optimality. Gnad and
-Hoffmann (2018) define star factorings by restricting how operators may touch
-leaves; we have not cross-checked our rule against their exact definition.
+therefore only affects performance, never soundness or optimality. Gnad,
+Poser and Hoffmann (2017) define star factorings by: every action that does
+not affect the center affects only one leaf and has preconditions only on
+it and the center. Our leaf actions are exactly those actions (their
+*leaf-only* actions); we additionally accept actions that affect the center
+or several leaves, and actions that read another leaf, as global actions,
+so arbitrary partitions are searchable. The strategies below produce
+*strict-star* factorings (every causal-graph arc between factors touches
+the center), which are star factorings.
 
 Strategies:
 
 1. **Fork (sink components)**, milestone 1, `Factoring::fork`. Every sink
    strongly connected component of the causal graph (no arcs leaving it) whose
    leaf state space has at most `2^16` states becomes a leaf; everything else
-   is the center. Operators on a sink component read only the center and that
+   is the center. This is the refined fork strategy of Gnad, Poser and
+   Hoffmann (footnote 1), which maximises the number of fork leaves.
+   Operators on a sink component read only the center and that
    component, so all of them are leaf actions. On a task whose causal graph is
    one component, this yields no leaves and the search degenerates to plain
    uniform-cost search over the center.
@@ -44,19 +52,22 @@ Strategies:
    partitions.
 3. **Inverted fork**, `Factoring::inverted_fork`. The fork strategy on the
    reversed causal graph: every small source SCC (no arcs entering it)
-   becomes a leaf.
-4. **Greedy strict-star factorings**, `Factoring::incident_arcs` and
-   `Factoring::max_leaves`. Starting from an empty center, move the variable
-   with the most causal-graph neighbours outside the center into the center,
-   one per step, until all variables are in it. At each step the candidate
-   leaves are the weakly connected components of the remaining variables
-   (components over `2^16` states join the center), so no arc joins two
-   leaves. `incident_arcs` takes the first step with at least two leaves
-   (else falls back to `max_leaves`), `max_leaves` the step with the most
-   leaves, the smaller center on ties. These are LP-free and only in the
-   spirit of Gnad, Poser and Hoffmann (2017), whose exact strategies (and
-   their scoring by leaf actions and leaf sizes) are not checked against
-   the paper.
+   becomes a leaf (the paper's refined inverted fork).
+4. **Incident arcs**, `Factoring::incident_arcs` (the paper's Figure 2).
+   Sort the variables by decreasing number of incident causal-graph arcs
+   (in plus out), move them into the center one at a time, take the
+   weakly connected components of the rest (within `2^16` states) as the
+   leaves, and keep the candidate with the most mobile leaves.
+5. **Independent set**, `Factoring::max_leaves` (Figure 1). Seed one leaf
+   per variable of a maximum independent set of the causal graph, grow the
+   leaves by variables adjacent to exactly one leaf (`maximizeFlexibility`),
+   drop frozen leaves, grow again, and keep the result with the most mobile
+   leaves over all enumerated maximum independent sets. Branch and bound
+   enumerates up to 16 sets within a budget of `2^24` neighbour lookups
+   (deterministic, instead of the paper's ten-second time-out); a unit
+   test checks it against brute force. Growing tracks mobility
+   incrementally: without axioms, moving `v` into leaf `L` can only change
+   `L`'s mobility, through operators touching `v`.
 
 `Factoring::check_star` reports the first causal-graph arc between two
 leaves (`Error::NotStar`). Every strategy except `Factoring::new` passes
@@ -66,18 +77,33 @@ variables: the strategies move them to the center (see
 
 *Scoring.* `Factoring::score` compiles the factoring with the search's own
 operator classification and reports the number of leaves, *mobile* leaves
-(our definition: leaves with at least one leaf action), leaf and global
-actions, the leaf-action share, and the largest and total leaf size; these
-are the quantities Gnad, Poser and Hoffmann (2017) rank by, but their exact
-definitions and ranking were not checked against the paper.
-`Factoring::auto` scores every `Strategy` and keeps the best by, in order:
-at least two mobile leaves (Torralba et al. 2016 report that their strategy
-abstains below two leaves, since decoupling pays off by not enumerating
-combinations of leaf states across leaves), the larger leaf-action share
-(an exact fraction), more mobile leaves, the smaller largest leaf, and the
-earlier strategy. Factorings the search would reject are skipped; without
-any mobile leaf the result is the factoring without leaves
-(explicit search). The ranking is ours, not the paper's.
+(leaves with at least one leaf action: the paper's flexibility, the share
+of leaf-only actions among the actions affecting the leaf, above 0), leaf
+and global actions, the leaf-action share, and the largest and total leaf
+size. `Factoring::auto` scores every `Strategy`, keeps those with at least
+two mobile leaves (the paper abstains below two, since decoupling pays off
+by not enumerating combinations of leaf states across leaves), and picks
+the best by the larger leaf-action share (an exact fraction), more mobile
+leaves, the smaller largest leaf, and the earlier strategy. Factorings the
+search would reject are skipped; if none is left, the result is the
+factoring without leaves (explicit search). The paper ranks by one-second
+sample searches instead; see the table.
+
+*Checked against the paper* (Gnad, Poser and Hoffmann, IJCAI 2017):
+
+| Paper | Paper rule | Our code | Status |
+| --- | --- | --- | --- |
+| Sec. 3.3, fn. 1 | refined fork / inverted fork: leaves are the sink / source causal-graph SCCs | `fork`, `inverted_fork`, components over `2^16` states join the center | matches (leaf bound: see below) |
+| Sec. 3.3 | X-shape factorings | not implemented | open |
+| Sec. 4 | leaf-size bound `2^32` states | `MAX_LEAF_STATES = 2^16` | deliberate deviation: leaf states are `u16` ranks |
+| Sec. 4.1 | mobile: flexibility (leaf-only actions over all actions affecting the leaf) above 0; frozen otherwise | at least one leaf action (`score`, and a cheap count the strategies use, asserted equal) | matches |
+| Fig. 2 | incident arcs: static order on the full causal graph, one candidate per center size 1 to the number of variables, max mobile leaves | same; ties: smaller variable, then smaller center | bug fixed: the order was recomputed per step from neighbours outside the center (distinct neighbours, not arcs), and the first candidate with two leaves (mobile or not) was taken; regression test `incident_arcs_keeps_the_most_mobile_leaves` |
+| Fig. 1 | MIS seed, `maximizeFlexibility`, drop frozen, `maximizeFlexibility` | `max_leaves`, as listed above | bug fixed: `max_leaves` was the incident-arcs walk with the most (not mobile) leaves, with no independent set and no growing; regression test `max_leaves_grows_the_independent_set` |
+| Fig. 1 | per round an argmax over the round's leaf sets (pseudocode: their size; prose: mobile leaves); return the round with the most mobile leaves | per round the most mobile leaves (the prose; the number of leaves is constant while growing), smallest variable on ties; between rounds the latest on ties | deliberate reading, ties ours |
+| Sec. 4.1 | all maximum independent sets found within 10 s | up to 16 within a deterministic work budget | deliberate deviation: `no_std`, reproducible |
+| Sec. 4 | abstain below two mobile leaves | `incident_arcs` and `max_leaves` return their best candidate anyway; `auto` abstains (no leaves) | deliberate: the strategy functions return a `Factoring`, not an `Option`; `auto` used to accept a single mobile leaf |
+| Sec. 5 | pick a factoring by 1 s sample searches: expansions (optimal), heuristic improvement (satisficing) | static score: leaf-action share, mobile leaves, largest leaf | deliberate deviation: no clock in `no_std`, and `auto` does not know the search configuration; open question |
+| Sec. 2 | causal graph arcs `pre ∪ eff -> eff` | `sas_plus::CausalGraph`, plus effect conditions and axioms | matches (the extra arcs only keep conditional effects and axioms inside one factor) |
 
 ## Decoupled state and pricing
 
@@ -436,9 +462,13 @@ Invalid tasks are rejected via `Task::validate`.
 5. **Done.** Conditional effects and axioms where decoupling allows;
    `Plan::validate`; a public `FactPrices` constructor.
 
-Done since: simulation-based leaf reduction and the adaptive default.
-Open: LM-cut, an index for the dominance store, decoupled symbolic search,
-decoupled partial-order reduction (strong stubborn sets), and multiple
+Done since: simulation-based leaf reduction and the adaptive default;
+the factoring strategies, the leaf reduction and the dominance criteria
+checked against the papers (tables above), with the incident-arcs and
+independent-set strategies of Gnad, Poser and Hoffmann (2017).
+Open: X-shape factorings, sample-search ranking in `Factoring::auto`,
+anytime decoupled A\* (ADA\*), LM-cut, an index for the dominance store,
+decoupled symbolic search, decoupled partial-order reduction (strong stubborn sets), and multiple
 centers.
 
 ## Cross-crate needs

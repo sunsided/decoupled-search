@@ -1,36 +1,53 @@
-//! Greedy strict-star factorings: move highly connected variables into the
-//! center until the rest falls apart into independent leaves.
+//! Strict-star factorings of Gnad, Poser and Hoffmann (IJCAI 2017,
+//! Section 4): the incident-arcs strategy (their Figure 2) and the
+//! independent-set strategy that maximises the number of leaves (their
+//! Figure 1, in [`independent_set`]).
 //!
-//! In the spirit of the incident-arcs and maximum-leaves strategies of Gnad,
-//! Poser and Hoffmann (IJCAI 2017), but greedy and LP-free; the details are
-//! our own and not checked against the paper.
+//! Both build leaves that no causal-graph arc connects, so every result
+//! passes [`Factoring::check_star`]. Both rank their candidates by the
+//! number of *mobile* leaves, leaves with at least one leaf action (the
+//! paper's flexibility `|A^L[F^L] \ A^C| / |A^L[F^L]|` above 0). The paper
+//! abstains below two mobile leaves; these functions return their best
+//! candidate anyway, and [`Factoring::auto`] abstains.
 //!
 //! ```mermaid
 //! graph LR
-//!     rest[non-center variables] --> comps[weakly connected components]
-//!     comps --> candidate[candidate: small components are leaves]
-//!     comps --> pick[move the highest-degree variable to the center]
-//!     pick --> rest
+//!     order[variables by incident arcs] --> grow[move the next one to the center]
+//!     grow --> comps[small weakly connected components are the leaves]
+//!     comps --> count[count mobile leaves]
+//!     count --> grow
+//!     count --> best[keep the first candidate with the most]
 //! ```
+
+mod independent_set;
 
 use alloc::vec;
 use alloc::vec::Vec;
 
+use core::cmp::Reverse;
+
 use sas_plus::{CausalGraph, Task, VarId};
 
 use super::{Factoring, leaf_states};
+use crate::decoupled::mobile_leaves;
 
 impl Factoring {
-    /// The greedy incident-arcs star factoring: repeatedly moves the variable
-    /// with the most causal-graph neighbours outside the center into the
-    /// center, and returns the first candidate with at least two leaves.
+    /// The incident-arcs star factoring (Gnad, Poser and Hoffmann 2017,
+    /// Figure 2): orders the variables by decreasing number of incident
+    /// causal-graph arcs, moves them into the center one at a time, and
+    /// keeps the candidate with the most mobile leaves.
     ///
     /// A candidate's leaves are the weakly connected components of the
     /// causal graph without the center that have at most
-    /// [`crate::MAX_LEAF_STATES`] states; larger components join the center.
-    /// No arc connects two leaves, so the result always passes
-    /// [`Factoring::check_star`]. If no candidate has two leaves, the result
-    /// is [`Factoring::max_leaves`].
+    /// [`crate::MAX_LEAF_STATES`] states; the other variables form the
+    /// center. No arc connects two leaves, so the result always passes
+    /// [`Factoring::check_star`]. A variable's incident arcs are its
+    /// incoming plus its outgoing arcs, counted once on the full causal
+    /// graph. Ties are ours, the paper leaves them open: in the order, the
+    /// smaller variable first; between candidates, the smaller center. As
+    /// in the paper, the center has at least one variable. The paper
+    /// abstains below two mobile leaves; this returns the best
+    /// candidate anyway, possibly without leaves.
     ///
     /// # Examples
     ///
@@ -64,21 +81,36 @@ impl Factoring {
     /// ```
     #[must_use]
     pub fn incident_arcs(task: &Task) -> Self {
-        let candidates = candidates(task);
-        let first = candidates.iter().position(|leaves| leaves.len() >= 2);
-        let leaves = match first {
-            Some(index) => candidates.into_iter().nth(index),
-            None => most_leaves(candidates),
-        };
+        let graph = CausalGraph::new(task);
+        let mut in_center = vec![false; task.num_variables()];
+        let mut best: Option<Candidate> = None;
+        for v in incident_arc_order(&graph, task.num_variables()) {
+            in_center[v] = true;
+            let candidate = Candidate::new(task, small_components(task, &graph, &in_center));
+            if best.as_ref().is_none_or(|b| candidate.mobile > b.mobile) {
+                best = Some(candidate);
+            }
+        }
 
-        Self::from_leaves(task, leaves.unwrap_or_default())
+        Self::from_leaves(task, best.map(|b| b.leaves).unwrap_or_default())
     }
 
-    /// The greedy maximum-leaves star factoring: of all candidates
-    /// [`Factoring::incident_arcs`] walks through, the one with the most
-    /// leaves, preferring the smaller center on ties.
+    /// The independent-set star factoring, which maximises the number of
+    /// leaves (Gnad, Poser and Hoffmann 2017, Figure 1): every maximum
+    /// independent set of the causal graph seeds one leaf per variable;
+    /// then variables adjacent to exactly one leaf join it while that gains
+    /// mobile leaves, frozen (immobile) leaves go back to the center, and
+    /// leaves grow once more. The result is the candidate with the most
+    /// mobile leaves.
     ///
-    /// Always passes [`Factoring::check_star`].
+    /// Variables that cannot be leaves (derived, or with more than
+    /// [`crate::MAX_LEAF_STATES`] values) are left out of the independent
+    /// sets. The paper enumerates maximum independent sets for up to ten
+    /// seconds; this enumerates at most 16 of them with a
+    /// deterministic search budget, after which the best set found so far
+    /// is used. Always passes
+    /// [`Factoring::check_star`]. The paper abstains below two mobile
+    /// leaves; this returns the best candidate anyway.
     ///
     /// # Examples
     ///
@@ -112,49 +144,55 @@ impl Factoring {
     /// ```
     #[must_use]
     pub fn max_leaves(task: &Task) -> Self {
-        Self::from_leaves(task, most_leaves(candidates(task)).unwrap_or_default())
+        Self::from_leaves(task, independent_set::factoring(task).leaves)
     }
 }
 
-/// The candidate with the most leaves, the earliest (smallest center) on
-/// ties; `None` only if there are no candidates.
-fn most_leaves(candidates: Vec<Vec<Vec<VarId>>>) -> Option<Vec<Vec<VarId>>> {
-    candidates.into_iter().rev().max_by_key(Vec::len)
+/// A candidate factoring's leaves and how many of them are mobile.
+struct Candidate {
+    /// The number of mobile leaves.
+    mobile: usize,
+    /// The leaves, each sorted.
+    leaves: Vec<Vec<VarId>>,
 }
 
-/// The leaf sets of the greedy walk, starting with an empty center and
-/// growing it by one highest-degree variable per step until every variable
-/// is in the center.
-///
-/// Each candidate's leaves are the small weakly connected components of the
-/// non-center variables, each sorted, in order of their smallest variable.
-fn candidates(task: &Task) -> Vec<Vec<Vec<VarId>>> {
-    let n = task.num_variables();
-    let graph = CausalGraph::new(task);
-    let mut in_center = vec![false; n];
-    let mut candidates = Vec::with_capacity(n + 1);
-    loop {
-        let leaves = weak_components(&graph, &in_center)
-            .into_iter()
-            .filter(|c| leaf_states(task, c).is_some())
-            .collect();
-        candidates.push(leaves);
-
-        match highest_degree(&graph, &in_center) {
-            Some(v) => in_center[v] = true,
-            None => return candidates,
-        }
+impl Candidate {
+    /// Scores `leaves`; a factoring the search would reject (an axiom across
+    /// two leaves) has no mobile leaves.
+    fn new(task: &Task, leaves: Vec<Vec<VarId>>) -> Self {
+        let mobile = mobility(task, &leaves).iter().filter(|&&m| m).count();
+        Self { mobile, leaves }
     }
 }
 
-/// The non-center variable with the most distinct causal-graph neighbours
-/// outside the center, the smallest on ties; `None` if all are in the center.
-fn highest_degree(graph: &CausalGraph, in_center: &[bool]) -> Option<VarId> {
-    (0..in_center.len())
-        .filter(|&v| !in_center[v])
-        .map(|v| (outside_neighbours(graph, in_center, v).len(), v))
-        .max_by(|(da, va), (db, vb)| da.cmp(db).then(vb.cmp(va)))
-        .map(|(_, v)| v)
+/// Per leaf, whether it has a leaf action; all `false` if the factoring
+/// would be rejected. `leaves` must contain no derived variables, or leaves
+/// of only derived variables would shift the indices.
+fn mobility(task: &Task, leaves: &[Vec<VarId>]) -> Vec<bool> {
+    let factoring = Factoring::from_leaves(task, leaves.to_vec());
+    mobile_leaves(task, &factoring).unwrap_or_else(|_| vec![false; factoring.leaves.len()])
+}
+
+/// The variables by decreasing number of incident causal-graph arcs
+/// (incoming plus outgoing), the smaller variable first on ties.
+fn incident_arc_order(graph: &CausalGraph, n: usize) -> Vec<VarId> {
+    let mut order: Vec<VarId> = (0..n).collect();
+    order.sort_by_key(|&v| {
+        (
+            Reverse(graph.successors(v).len() + graph.predecessors(v).len()),
+            v,
+        )
+    });
+    order
+}
+
+/// The weakly connected components of the non-center variables with at
+/// most [`crate::MAX_LEAF_STATES`] states.
+fn small_components(task: &Task, graph: &CausalGraph, in_center: &[bool]) -> Vec<Vec<VarId>> {
+    weak_components(graph, in_center)
+        .into_iter()
+        .filter(|c| leaf_states(task, c).is_some())
+        .collect()
 }
 
 /// The distinct neighbours of `v` (either arc direction) that are not in
@@ -200,4 +238,44 @@ fn weak_components(graph: &CausalGraph, in_center: &[bool]) -> Vec<Vec<VarId>> {
     }
 
     components
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec::Vec;
+
+    use sas_plus::random::{RandomTaskParams, random_task};
+
+    use super::*;
+
+    /// The cheap mobility count the strategies rank by agrees with
+    /// [`Factoring::score`] whenever the search accepts the factoring.
+    #[test]
+    fn mobility_matches_the_score() {
+        let mut compared = 0;
+        for seed in 0..200 {
+            let task = random_task(seed, RandomTaskParams::default());
+            let n = task.num_variables();
+            let partitions: [Vec<Vec<VarId>>; 3] = [
+                (0..n).map(|v| vec![v]).collect(),
+                (0..n).step_by(2).map(|v| vec![v]).collect(),
+                vec![(0..n / 2).collect()],
+            ];
+            for leaves in partitions {
+                let leaves: Vec<Vec<VarId>> = leaves
+                    .into_iter()
+                    .filter(|l| !l.is_empty() && leaf_states(&task, l).is_some())
+                    .collect();
+                let Ok(score) = Factoring::from_leaves(&task, leaves.clone()).score(&task) else {
+                    continue;
+                };
+
+                let mobile = mobility(&task, &leaves).iter().filter(|&&m| m).count();
+                assert_eq!(mobile, score.mobile_leaves, "seed {seed}: {leaves:?}");
+                compared += 1;
+            }
+        }
+
+        assert!(compared > 300, "only {compared} comparisons");
+    }
 }

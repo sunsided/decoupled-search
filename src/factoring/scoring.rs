@@ -1,14 +1,21 @@
 //! Scoring factorings, and choosing among the strategies automatically.
 //!
-//! The scored quantities (leaf-action share, leaf sizes, mobile leaves) are
-//! those Gnad, Poser and Hoffmann (IJCAI 2017) rank factorings by, but
-//! neither their exact definitions nor their ranking were checked against
-//! the paper. Here a leaf is *mobile* if it has at least one leaf action.
-//! Torralba, Gnad, Dubbert and Hoffmann (IJCAI 2016) report that the
-//! strategy they use abstains on tasks with fewer than two leaves, because
-//! the gain of decoupled search comes from not enumerating combinations of
-//! leaf states across leaves; [`Factoring::auto`] prefers two mobile leaves
-//! for the same reason. The ranking itself is our own.
+//! A leaf is *mobile* if it has at least one leaf action. This is Gnad,
+//! Poser and Hoffmann's (IJCAI 2017) definition: their flexibility of a
+//! leaf is the share of the actions affecting it that affect only it, and
+//! a leaf is mobile if that share is positive; for strict-star factorings
+//! the actions affecting only a leaf are exactly our leaf actions. Like
+//! their strategies (and Torralba, Gnad, Dubbert and Hoffmann 2016),
+//! [`Factoring::auto`] abstains, falling back to explicit search, when no
+//! candidate has two mobile leaves: the gain of decoupled search comes from
+//! not enumerating combinations of leaf states across leaves.
+//!
+//! The paper ranks the candidate factorings by one-second sample searches
+//! (expansions for optimal planning, heuristic improvement for satisficing
+//! planning). This crate has no clock (`no_std`) and `auto` does not know
+//! the search configuration, so it ranks by the static score instead: the
+//! leaf-action share, then mobile leaves, then the smaller largest leaf.
+//! That ranking is ours.
 
 use core::cmp::Reverse;
 
@@ -27,7 +34,7 @@ pub enum Strategy {
     InvertedFork,
     /// [`Factoring::incident_arcs`].
     IncidentArcs,
-    /// [`Factoring::max_leaves`].
+    /// [`Factoring::max_leaves`], the independent-set strategy.
     MaxLeaves,
 }
 
@@ -81,8 +88,9 @@ impl Strategy {
 pub struct FactoringScore {
     /// Number of leaves.
     pub leaves: usize,
-    /// Number of leaves with at least one leaf action, which can move
-    /// without a global action.
+    /// Number of mobile leaves: leaves with at least one leaf action, which
+    /// can move without a global action (Gnad, Poser and Hoffmann 2017:
+    /// flexibility above 0).
     pub mobile_leaves: usize,
     /// Operators priced inside a leaf.
     pub leaf_actions: usize,
@@ -110,12 +118,11 @@ impl FactoringScore {
         share
     }
 
-    /// The ranking key of [`Factoring::auto`], greater is better: at least
-    /// two mobile leaves, then the leaf-action share (compared exactly, as
-    /// a fraction), then more mobile leaves, then the smaller largest leaf.
-    fn key(&self) -> (usize, Share, usize, Reverse<usize>) {
+    /// The ranking key of [`Factoring::auto`], greater is better: the
+    /// leaf-action share (compared exactly, as a fraction), then more
+    /// mobile leaves, then the smaller largest leaf.
+    fn key(&self) -> (Share, usize, Reverse<usize>) {
         (
-            self.mobile_leaves.min(2),
             Share(self.leaf_actions, self.leaf_actions + self.global_actions),
             self.mobile_leaves,
             Reverse(self.max_leaf_states),
@@ -190,15 +197,18 @@ impl Factoring {
         })
     }
 
-    /// The best factoring of every [`Strategy`] for `task`, by score:
-    /// prefer at least two mobile leaves, then the largest share of leaf
-    /// actions, then more mobile leaves, then the smaller largest leaf, then
-    /// the earlier strategy in [`Strategy::ALL`].
+    /// The best factoring of every [`Strategy`] for `task` with at least two
+    /// mobile leaves, by score: the largest share of leaf actions, then more
+    /// mobile leaves, then the smaller largest leaf, then the earlier
+    /// strategy in [`Strategy::ALL`].
     ///
     /// Factorings that [`Factoring::score`] rejects (for example because
     /// an axiom spans two of their leaves) are skipped. If no candidate has
-    /// a mobile leaf, decoupling would only add overhead, and the result is
-    /// the factoring without leaves: explicit search over the whole task.
+    /// two mobile leaves, the result is the factoring without leaves:
+    /// explicit search over the whole task. Gnad, Poser and Hoffmann (2017)
+    /// abstain in that case too, since decoupling gains by not combining
+    /// the states of several leaves; they rank candidates by short sample
+    /// searches, this ranking is static (see the module docs).
     ///
     /// # Examples
     ///
@@ -240,7 +250,7 @@ impl Factoring {
                 let factoring = Self::with_strategy(task, s);
                 factoring.score(task).ok().map(|score| (score, factoring))
             })
-            .filter(|(score, _)| score.mobile_leaves > 0)
+            .filter(|(score, _)| score.mobile_leaves >= 2)
             .max_by_key(|(score, _)| score.key())
             .map_or_else(
                 || Self::from_leaves(task, alloc::vec::Vec::new()),
