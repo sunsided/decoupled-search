@@ -7,6 +7,7 @@
 //! by [`Leaf::close`].
 
 mod leaf;
+mod prices;
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -16,6 +17,7 @@ use sas_plus::{Fact, OpId, Task, Value, VarId};
 use crate::{Error, Factoring, MAX_LEAF_STATES};
 pub(crate) use leaf::{Leaf, Price, UNREACHED};
 use leaf::{LeafAction, LeafFact, LeafPart};
+pub(crate) use prices::Prices;
 
 /// Where a task variable lives in the factoring.
 #[derive(Clone, Copy, Debug)]
@@ -55,8 +57,9 @@ pub(crate) struct GlobalAction {
 pub(crate) struct DecoupledState {
     /// Values of the center variables, indexed by center slot.
     pub(crate) center: Vec<Value>,
-    /// `prices[leaf][rank]`, [`UNREACHED`] for leaf states not reached.
-    pub(crate) prices: Vec<Vec<Price>>,
+    /// The reached leaf states of each leaf with their prices, indexed by
+    /// leaf. Never empty for a leaf: its initial or seed state is reached.
+    pub(crate) prices: Vec<Prices>,
 }
 
 impl DecoupledState {
@@ -66,7 +69,7 @@ impl DecoupledState {
         self.prices
             .iter()
             .zip(&other.prices)
-            .all(|(a, b)| a.iter().zip(b).all(|(x, y)| x <= y))
+            .all(|(a, b)| a.at_most(b))
     }
 }
 
@@ -142,12 +145,8 @@ impl DecoupledTask {
     /// The initial decoupled state: the initial center, and every leaf closed
     /// from its initial leaf state at price 0.
     pub(crate) fn initial(&self) -> DecoupledState {
-        let mut state = DecoupledState {
-            center: self.initial_center.clone(),
-            prices: self.leaves.iter().map(Leaf::initial_prices).collect(),
-        };
-        self.close_all(&mut state);
-        state
+        let dense = self.leaves.iter().map(Leaf::initial_prices).collect();
+        self.closed(self.initial_center.clone(), dense)
     }
 
     /// All successors of `state` as `(global action index, successor)`.
@@ -165,19 +164,20 @@ impl DecoupledTask {
             return None;
         }
 
-        let mut prices = Vec::with_capacity(self.leaves.len());
+        let mut dense = Vec::with_capacity(self.leaves.len());
         for ((leaf, part), old) in self.leaves.iter().zip(&action.parts).zip(&state.prices) {
+            let old = old.to_dense(leaf.size);
             let Some(part) = part else {
-                prices.push(old.clone());
+                dense.push(old);
                 continue;
             };
 
-            let next = leaf.transfer(part, old);
+            let next = leaf.transfer(part, &old);
             if next.iter().all(|&p| p == UNREACHED) {
                 return None;
             }
 
-            prices.push(next);
+            dense.push(next);
         }
 
         let mut center = state.center.clone();
@@ -185,16 +185,24 @@ impl DecoupledTask {
             center[f.var] = f.value;
         }
 
-        let mut next = DecoupledState { center, prices };
-        self.close_all(&mut next);
-        Some(next)
+        Some(self.closed(center, dense))
     }
 
-    /// Runs leaf reachability on every leaf of `state` under its center.
-    fn close_all(&self, state: &mut DecoupledState) {
-        for (leaf, prices) in self.leaves.iter().zip(&mut state.prices) {
-            leaf.close(&state.center, prices);
-        }
+    /// The decoupled state with center `center` and every leaf's seed prices
+    /// `dense` closed under leaf reachability for that center, then stored
+    /// compactly.
+    fn closed(&self, center: Vec<Value>, mut dense: Vec<Vec<Price>>) -> DecoupledState {
+        let prices = self
+            .leaves
+            .iter()
+            .zip(&mut dense)
+            .map(|(leaf, prices)| {
+                leaf.close(&center, prices);
+                Prices::from_dense(prices)
+            })
+            .collect();
+
+        DecoupledState { center, prices }
     }
 
     /// The cost still to pay in the leaves to reach the goal from `state`:

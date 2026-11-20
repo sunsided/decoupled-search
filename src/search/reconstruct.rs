@@ -79,10 +79,10 @@ fn stage_seeds(task: &DecoupledTask, path: &Path<'_>, leaf: usize, stage: usize)
         return compiled.initial_prices();
     };
 
-    let previous = &path[stage - 1].1.prices[leaf];
+    let previous = path[stage - 1].1.prices[leaf].to_dense(compiled.size);
     match &task.globals[action].parts[leaf] {
-        Some(part) => compiled.transfer(part, previous),
-        None => previous.clone(),
+        Some(part) => compiled.transfer(part, &previous),
+        None => previous,
     }
 }
 
@@ -99,7 +99,9 @@ fn step_back(
     let action = path[stage].0.expect("only the initial stage has no action");
     match &task.globals[action].parts[leaf] {
         Some(part) => {
-            task.leaves[leaf].transfer_source(part, &path[stage - 1].1.prices[leaf], seed, price)
+            let compiled = &task.leaves[leaf];
+            let previous = path[stage - 1].1.prices[leaf].to_dense(compiled.size);
+            compiled.transfer_source(part, &previous, seed, price)
         }
         None => seed,
     }

@@ -7,6 +7,8 @@ use core::cmp::Reverse;
 
 use sas_plus::{Fact, OpId, Value};
 
+use super::Prices;
+
 /// The cost of reaching a leaf state; [`UNREACHED`] when it is not reached.
 pub(crate) type Price = u64;
 
@@ -175,12 +177,11 @@ impl Leaf {
 
     /// The cheapest price of a reached leaf state that satisfies the leaf
     /// goal, with that state's rank; `None` if no goal state is reached.
-    pub(crate) fn cheapest_goal(&self, prices: &[Price]) -> Option<(Price, usize)> {
+    pub(crate) fn cheapest_goal(&self, prices: &Prices) -> Option<(Price, usize)> {
         prices
             .iter()
-            .enumerate()
-            .filter(|&(rank, &p)| p != UNREACHED && self.satisfies(rank, &self.goal))
-            .map(|(rank, &p)| (p, rank))
+            .filter(|&(rank, _)| self.satisfies(rank, &self.goal))
+            .map(|(rank, p)| (p, rank))
             .min()
     }
 }
