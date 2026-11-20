@@ -6,7 +6,8 @@ task's variables into one *center* and several *leaves*, searches over center
 paths only, and keeps, per leaf, the set of leaf states reachable along the
 current center path together with their cheapest cost (the *price*).
 
-Status: milestone 1 (see [Milestones](#milestones)).
+Status: milestone 1 plus parts of milestones 2 to 4 (see
+[Milestones](#milestones)).
 
 ## Terminology
 
@@ -42,21 +43,32 @@ Strategies:
 2. **Explicit**, milestone 1, `Factoring::new(task, leaves)`. The caller names
    the leaves; the center is the rest. Used by tests to exercise arbitrary
    partitions.
-3. **Strict-star factorings**, milestone 3. Gnad, Poser and Hoffmann (2017)
-   detect general strict-star topologies, among them a greedy strategy that
-   moves highly connected variables (by incident causal-graph arcs) into the
-   center; port those after reading the paper (details here are not yet
-   checked against it). Score a factoring by number of
-   leaves, leaf state-space sizes, and the share of operators that are leaf
-   actions; consider rejecting factorings with fewer than two leaves.
-4. **Inverted fork / mobile leaves**, later. Only if benchmarks call for it.
+3. **Inverted fork**, `Factoring::inverted_fork`. The fork strategy on the
+   reversed causal graph: every small source SCC (no arcs entering it)
+   becomes a leaf.
+4. **Greedy strict-star factorings**, `Factoring::incident_arcs` and
+   `Factoring::max_leaves`. Starting from an empty center, move the variable
+   with the most causal-graph neighbours outside the center into the center,
+   one per step, until all variables are in it. At each step the candidate
+   leaves are the weakly connected components of the remaining variables
+   (components over `2^16` states join the center), so no arc joins two
+   leaves. `incident_arcs` takes the first step with at least two leaves
+   (else falls back to `max_leaves`), `max_leaves` the step with the most
+   leaves, the smaller center on ties. These are LP-free and only in the
+   spirit of Gnad, Poser and Hoffmann (2017), whose exact strategies (and
+   their scoring by leaf actions and leaf sizes) are not checked against
+   the paper.
+
+`Factoring::check_star` reports the first causal-graph arc between two
+leaves (`Error::NotStar`). Every strategy except `Factoring::new` passes
+it; search does not require it.
 
 ## Decoupled state and pricing
 
 ```text
 DecoupledState {
     center: Vec<Value>,      // values of the center variables, in Factoring::center order
-    prices: Vec<Vec<u64>>,   // prices[leaf][rank]; u64::MAX = unreached
+    prices: Vec<Prices>,     // per leaf: reached ranks (u16, ascending) and their u64 prices
 }
 ```
 
@@ -69,8 +81,12 @@ add; nothing allocates per leaf state.
 the leaf's ranks with the leaf actions whose center preconditions hold. The
 result is the new price vector. Seeds are all finite-priced ranks.
 
-Prices are dense vectors. That is simple and fast for small leaves, but costs
-`O(|S_L|)` memory per leaf per decoupled state. Sparse maps are milestone 2.
+Stored states keep only the reached leaf states: parallel vectors of `u16`
+ranks and `u64` prices, ten bytes per reached state. Leaf closure,
+transfers and reconstruction work on a dense vector that successor
+generation builds from the stored form and compacts again; that costs
+`O(|S_L|)` time per leaf per successor, but no longer `O(|S_L|)` memory per
+stored state.
 
 ## Successor generation
 
@@ -91,11 +107,13 @@ A decoupled state is a goal state iff the center goal holds and every leaf has
 a reached rank satisfying its goal. Its *solution cost* is `g` plus, per leaf,
 the cheapest price among goal ranks.
 
-Milestone 1 search is uniform-cost search over decoupled states ordered by
-`g`. Because the solution cost exceeds `g` by the leaf goal prices, the first
-goal state found is not necessarily optimal. The search records the best
-solution at generation time and stops once the popped `g` is at least the
-best solution cost (leaf prices are non-negative).
+`search` is uniform-cost search over decoupled states ordered by `g`,
+`astar` orders by `g + h`. Because the solution cost exceeds `g` by the
+leaf goal prices, the first goal state found is not necessarily optimal.
+Both record the best solution at generation time and stop once the popped
+key is at least the best solution cost (leaf prices are non-negative and
+`h` is a lower bound). `gbfs` orders by `h` alone and returns the first
+solution generated.
 
 ## Dominance pruning
 
@@ -103,9 +121,12 @@ Prices can grow without bound along center cycles: a center loop that forces
 a leaf to alternate between two states raises both prices on every round.
 Exact duplicate detection then never terminates on unsolvable tasks.
 
-Milestone 1 prunes a newly generated state `t` if a stored state `s` (open or
-closed) has the same center, `g(s) <= g(t)`, and `prices_s[L][r] <=
-prices_t[L][r]` for all leaves and ranks (unreached as `∞`). Every completion
+Uniform-cost search and A* prune a newly generated state `t` if a stored
+state `s` (open or closed) has the same center, `g(s) <= g(t)`, and
+`prices_s[L][r] <= prices_t[L][r]` for all leaves and ranks (unreached as
+`∞`). Exact duplicates are the special case of equality. Leaf prices here
+exclude `g`, so the `g` condition is needed for optimality. GBFS drops it:
+`s` still reaches every goal `t` reaches, which preserves solvability. Every completion
 of `t` is then also a completion of `s` at no higher cost, so this is safe for
 optimality. Termination follows from Dickson's lemma: the comparison is a
 well-quasi-order on `(g, prices)` per center state, so no infinite sequence of
@@ -138,23 +159,27 @@ The plan cost equals the reported solution cost; tests check that with
 
 ## Heuristic interface
 
-Milestone 3. A decoupled state stands for many explicit states, so the
-heuristic must be admissible for all of them at once. The planned trait:
+A decoupled state stands for many explicit states, so the heuristic must
+be admissible for all of them at once:
 
 ```rust
 pub trait DecoupledHeuristic {
-    /// Lower bound on the remaining cost of the best completion of `state`,
-    /// counting global actions and leaf prices still to pay; `None` if
-    /// provably unsolvable.
-    fn estimate(&self, view: &DecoupledView<'_>) -> Option<u64>;
+    /// Lower bound on the remaining cost beyond g (leaf prices plus further
+    /// operators); `None` if provably unsolvable.
+    fn estimate(&self, facts: &FactPrices<'_>) -> Option<u64>;
 }
 ```
 
-Candidates: `h^max` and LM-cut adapted to decoupled states (Gnad and
-Hoffmann 2015 evaluate `h^max` in fork-decoupled search; how they fold leaf
-prices in is not yet checked), and abstraction heuristics from
-`merge-and-shrink` behind an optional feature. Search becomes A* on
-`g + h`, with the same "stop when popped f >= best solution" rule.
+`FactPrices` gives, per fact, the cheapest price of a member state
+containing it: 0 for the center facts that hold, the cheapest reached leaf
+state for leaf facts. `HMax` seeds `h^max` over all operators of the
+original task with these prices. It is admissible: a completion through a
+member state pays at least the largest price of a fact it uses, plus at
+least `h^max` of that state. `HFf` extracts a relaxed plan from `h^add`
+best supporters and adds the largest seed price it starts from; it is not
+admissible and meant for GBFS. How Gnad and Hoffmann (2015) fold leaf
+prices into `h^max` is not checked against the paper. LM-cut and
+`merge-and-shrink` heuristics remain open.
 
 ## Unsupported input
 
@@ -178,8 +203,14 @@ Invalid tasks are rejected via `Task::validate`.
   exercise ties in leaf closure and reconstruction.
 - **Fork shape.** A hand-built truck-and-packages task checks that the fork
   factoring finds one center and two leaves.
-- **Plan validity.** Every returned plan passes `Task::validate_plan` with the
-  reported cost.
+- **Plan validity.** Every returned plan passes a test-local validator that
+  applies operators fact by fact, with the reported cost.
+- **Star tasks.** Random tasks that are stars by construction (one or two
+  center variables, two or three leaves, global actions reading and writing
+  at most one leaf, a third of the costs zero). All strategies must pass
+  `check_star`; uniform-cost search and A* with `h^max` must match Dijkstra
+  under every strategy; GBFS with `h^FF` and `h^max` must agree on
+  solvability and never beat the optimum.
 - **Termination on unsolvable tasks.** A hand-built task whose center loop
   forces a leaf to alternate, with an unreachable goal.
 - **Fixtures.** The hand-encoded gripper tasks from `sas-plus` (copied to
@@ -188,15 +219,16 @@ Invalid tasks are rejected via `Task::validate`.
 
 ## Milestones
 
-1. **Done in this draft.** Fork and explicit factorings, decoupled state with
-   dense prices, leaf closure, global successors, uniform-cost search with
-   simple dominance pruning, plan reconstruction, cross-checks.
-2. Sparse price maps; leaf-state dominance and frontier pruning
-   (Torralba et al. 2016); expansion statistics.
-3. Incident-arc / SCC star factorings with a scoring function; A* with a
-   heuristic trait; `h^max` over the center.
-4. Satisficing mode (reachability only, no prices; GBFS); optional
-   `merge-and-shrink` heuristics behind a feature.
+1. **Done.** Fork and explicit factorings, leaf closure, global
+   successors, uniform-cost search with simple dominance pruning, plan
+   reconstruction, cross-checks.
+2. **Partly done:** sparse stored prices. Open: the stronger dominance and
+   frontier pruning of Torralba et al. (2016); expansion statistics.
+3. **Done:** inverted-fork and greedy star factorings with a star check;
+   A* with a heuristic trait; `h^max` and `h^FF` seeded with fact prices.
+   Open: scoring factorings by leaf-action share and leaf sizes.
+4. **Partly done:** GBFS. Open: reachability-only leaves without prices;
+   optional `merge-and-shrink` heuristics behind a feature.
 5. Conditional effects confined to one leaf.
 
 ## Cross-crate needs
@@ -211,6 +243,9 @@ Invalid tasks are rejected via `Task::validate`.
   lists.
 - `search-core`: a shared `Plan { ops, cost }` type would avoid one more
   local definition.
+- `planning-heuristics`: `HMax` and `HFf` here run their own relaxed
+  exploration. If that crate offers `h^max`/`h^add` seeded with per-fact
+  initial costs, these could delegate to it.
 
 ## References
 

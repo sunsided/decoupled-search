@@ -4,16 +4,29 @@ Decoupled search for factored SAS+ planning: center and leaf factoring, leaf rea
 
 ## Status
 
-Pre-release (milestone 1 of [docs/design.md](docs/design.md)): fork and
-explicit center/leaf factorings over `sas-plus` tasks, decoupled states with
-per-leaf prices, uniform-cost decoupled search with simple dominance pruning,
-and reconstruction of a cost-optimal sequential plan. Axioms and conditional
-effects are not supported yet. The API will change.
+Pre-release. The API will change. Implemented (see
+[docs/design.md](docs/design.md)):
+
+- Factorings: fork, inverted fork, greedy incident-arcs and maximum-leaves
+  star factorings, explicit partitions, and a strict-star check.
+- Leaf reachability with prices (cheapest cost per leaf state along the
+  center path); stored states keep only reached leaf states, as `u16` ranks
+  with `u64` prices.
+- Uniform-cost search and A* (cost-optimal), and GBFS (satisficing), with
+  leaf-state dominance pruning.
+- Heuristics on decoupled states: `h^max` (admissible) and `h^FF`, both
+  seeded with per-fact leaf prices.
+- Reconstruction of a sequential plan for the original task.
+
+Not supported yet: axioms, conditional effects, the stronger dominance
+criteria of Torralba et al. (2016), and `merge-and-shrink` heuristics.
 
 ```rust
-use decoupled_search::{Factoring, search};
+use decoupled_search::{Factoring, HMax, astar, search};
 
-let plan = search(&task, &Factoring::fork(&task))?;
+let factoring = Factoring::incident_arcs(&task);
+let plan = search(&task, &factoring)?;
+let plan = astar(&task, &factoring, &HMax::new(&task))?;
 ```
 
 ## License

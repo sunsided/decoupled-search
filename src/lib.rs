@@ -4,24 +4,27 @@
 //! [`sas_plus`] (Gnad & Hoffmann, ICAPS 2015 and AIJ 2018).
 //!
 //! A [`Factoring`] splits the variables into a *center* and *leaves*.
-//! [`search()`] then explores paths of *global actions* (operators that are not
-//! confined to one leaf) and keeps, for every leaf, the price of each leaf
-//! state reachable along the current path. It returns a cost-optimal
-//! sequential [`Plan`] for the original task.
+//! [`search()`], [`astar`] and [`gbfs`] then explore paths of *global
+//! actions* (operators that are not confined to one leaf) and keep, for
+//! every leaf, the price of each leaf state reachable along the current
+//! path. They return a sequential [`Plan`] for the original task,
+//! cost-optimal for the first two.
 //!
 //! ```mermaid
 //! graph LR
-//!     task[sas_plus::Task] --> factoring[Factoring::fork / Factoring::new]
-//!     factoring --> search[search: uniform-cost over decoupled states]
+//!     task[sas_plus::Task] --> factoring[Factoring: fork, star, explicit]
+//!     factoring --> search[search / astar / gbfs over decoupled states]
 //!     task --> search
-//!     search --> plan[Plan: sequential, cost-optimal]
+//!     heuristic[HMax / HFf] --> search
+//!     search --> plan[Plan: sequential]
 //! ```
 //!
 //! ## Status
 //!
-//! Pre-release, milestone 1 of `docs/design.md`: fork and explicit factorings,
-//! uniform-cost search with simple dominance pruning, no heuristics. Tasks
-//! with axioms or conditional effects are rejected. The API will change.
+//! Pre-release, see `docs/design.md`: fork, inverted-fork, greedy star and
+//! explicit factorings; uniform-cost, A* and greedy search with leaf-state
+//! dominance pruning; `h^max` and `h^FF` on decoupled states. Tasks with
+//! axioms or conditional effects are rejected. The API will change.
 //!
 //! Repository: <https://github.com/sunsided/decoupled-search>
 
