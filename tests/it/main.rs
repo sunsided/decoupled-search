@@ -5,6 +5,7 @@ mod dijkstra;
 mod errors;
 mod fixtures;
 mod random;
+mod star;
 mod unsolvable;
 
 use decoupled_search::{Factoring, search};

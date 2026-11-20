@@ -1,4 +1,7 @@
-//! Center/leaf partitions of a task's variables.
+//! Center/leaf partitions of a task's variables, and strategies that derive
+//! them from the causal graph.
+
+mod star;
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -78,14 +81,135 @@ impl Factoring {
     /// small component becomes one leaf with an empty center.
     #[must_use]
     pub fn fork(task: &Task) -> Self {
-        let leaves: Vec<Vec<VarId>> =
-            sink_components(&CausalGraph::new(task), task.num_variables())
-                .into_iter()
-                .filter(|c| leaf_states(task, c).is_some())
-                .collect();
+        let graph = CausalGraph::new(task);
+        Self::from_components(
+            task,
+            sink_components(task.num_variables(), |v| graph.successors(v)),
+        )
+    }
 
-        // Sink components are disjoint, non-empty and filtered by size: nothing to check.
+    /// The inverted-fork factoring: every source strongly connected component
+    /// of the causal graph (one no arc enters) with at most
+    /// [`MAX_LEAF_STATES`] states is a leaf, everything else is the center.
+    ///
+    /// Operators on a source component read and write only that component,
+    /// and the center may read it. Such operators are leaf actions unless they
+    /// also touch the center.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use decoupled_search::Factoring;
+    /// use sas_plus::{Effect, Fact, Operator, State, Task, Variable};
+    ///
+    /// // A switch (variable 0) that a lamp (variable 1) depends on.
+    /// let op = |pre: Vec<Fact>, eff: Fact| Operator {
+    ///     name: "op".into(),
+    ///     pre,
+    ///     eff: vec![Effect::new(eff)],
+    ///     cost: 1,
+    /// };
+    /// let task = Task {
+    ///     variables: vec![Variable::new("switch", 2), Variable::new("lamp", 2)],
+    ///     operators: vec![
+    ///         op(vec![], Fact::new(0, 1)),
+    ///         op(vec![Fact::new(0, 1)], Fact::new(1, 1)),
+    ///     ],
+    ///     initial: State(vec![0, 0]),
+    ///     goal: vec![Fact::new(1, 1)],
+    ///     axioms: vec![],
+    /// };
+    ///
+    /// let factoring = Factoring::inverted_fork(&task);
+    /// assert_eq!(factoring.leaves(), &[vec![0]]);
+    /// assert_eq!(factoring.center(), &[1]);
+    /// ```
+    #[must_use]
+    pub fn inverted_fork(task: &Task) -> Self {
+        let graph = CausalGraph::new(task);
+        Self::from_components(
+            task,
+            sink_components(task.num_variables(), |v| graph.predecessors(v)),
+        )
+    }
+
+    /// A factoring whose leaves are the given disjoint, non-empty components
+    /// that have at most [`MAX_LEAF_STATES`] states; larger components join
+    /// the center.
+    fn from_components(task: &Task, components: Vec<Vec<VarId>>) -> Self {
+        let leaves = components
+            .into_iter()
+            .filter(|c| leaf_states(task, c).is_some())
+            .collect();
+
         Self::from_leaves(task, leaves)
+    }
+
+    /// Checks that the factoring is a strict star: no causal-graph arc
+    /// connects variables of two different leaves, so leaves interact only
+    /// through the center.
+    ///
+    /// Search does not require this, since an operator that couples two
+    /// leaves becomes a global action. A star factoring guarantees that every
+    /// operator touches at most one leaf, which keeps global actions cheap
+    /// and the leaves independent. All strategies of this type except
+    /// [`Factoring::new`] produce star factorings.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotStar`] with the first offending arc `from -> to` (in
+    /// variable order), and [`Error::FactoringMismatch`] if the factoring was
+    /// built for a task with fewer variables.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use decoupled_search::{Error, Factoring};
+    /// use sas_plus::{Effect, Fact, Operator, State, Task, Variable};
+    ///
+    /// // One operator reads variable 0 and writes variable 1.
+    /// let task = Task {
+    ///     variables: vec![Variable::new("a", 2), Variable::new("b", 2)],
+    ///     operators: vec![Operator {
+    ///         name: "op".into(),
+    ///         pre: vec![Fact::new(0, 1)],
+    ///         eff: vec![Effect::new(Fact::new(1, 1))],
+    ///         cost: 1,
+    ///     }],
+    ///     initial: State(vec![0, 0]),
+    ///     goal: vec![Fact::new(1, 1)],
+    ///     axioms: vec![],
+    /// };
+    ///
+    /// let split = Factoring::new(&task, vec![vec![0], vec![1]])?;
+    /// assert_eq!(split.check_star(&task), Err(Error::NotStar { from: 0, to: 1 }));
+    /// assert_eq!(Factoring::fork(&task).check_star(&task), Ok(()));
+    /// # Ok::<(), Error>(())
+    /// ```
+    pub fn check_star(&self, task: &Task) -> Result<(), Error> {
+        let mut leaf_of = vec![None; task.num_variables()];
+        for (leaf, vars) in self.leaves.iter().enumerate() {
+            for &v in vars {
+                *leaf_of.get_mut(v).ok_or(Error::FactoringMismatch)? = Some(leaf);
+            }
+        }
+
+        let graph = CausalGraph::new(task);
+        for from in 0..task.num_variables() {
+            let Some(leaf) = leaf_of[from] else {
+                continue;
+            };
+
+            if let Some(&to) = graph
+                .successors(from)
+                .iter()
+                .find(|&&to| leaf_of[to].is_some_and(|other| other != leaf))
+            {
+                return Err(Error::NotStar { from, to });
+            }
+        }
+
+        Ok(())
     }
 
     /// The center variables, sorted ascending. May be empty.
@@ -110,16 +234,20 @@ fn leaf_states(task: &Task, vars: &[VarId]) -> Option<usize> {
     })
 }
 
-/// The sink strongly connected components of `graph` over `n` variables,
-/// each sorted, in order of their smallest variable.
+/// The sink strongly connected components of the graph over `n` vertices
+/// with arcs `v -> successors(v)`, each sorted, in order of their smallest
+/// vertex.
 ///
 /// A vertex's component is a sink iff every vertex it reaches reaches it back.
 ///
 /// shortcut: one depth-first search per vertex, `O(n * (n + arcs))` time and
 /// `O(n^2)` memory; switch to Tarjan if tasks with thousands of variables
 /// show up.
-fn sink_components(graph: &CausalGraph, n: usize) -> Vec<Vec<VarId>> {
-    let reach: Vec<Vec<bool>> = (0..n).map(|v| reachable(graph, n, v)).collect();
+fn sink_components<'g>(
+    n: usize,
+    successors: impl Fn(VarId) -> &'g [VarId] + Copy,
+) -> Vec<Vec<VarId>> {
+    let reach: Vec<Vec<bool>> = (0..n).map(|v| reachable(n, successors, v)).collect();
     let mut assigned = vec![false; n];
     let mut sinks = Vec::new();
     for v in 0..n {
@@ -140,13 +268,14 @@ fn sink_components(graph: &CausalGraph, n: usize) -> Vec<Vec<VarId>> {
     sinks
 }
 
-/// The vertices reachable from `start` in `graph`, including `start`.
-fn reachable(graph: &CausalGraph, n: usize, start: VarId) -> Vec<bool> {
+/// The vertices reachable from `start` over arcs `v -> successors(v)`,
+/// including `start`.
+fn reachable<'g>(n: usize, successors: impl Fn(VarId) -> &'g [VarId], start: VarId) -> Vec<bool> {
     let mut seen = vec![false; n];
     let mut stack = vec![start];
     seen[start] = true;
     while let Some(v) = stack.pop() {
-        for &w in graph.successors(v) {
+        for &w in successors(v) {
             if !seen[w] {
                 seen[w] = true;
                 stack.push(w);

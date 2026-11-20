@@ -90,6 +90,15 @@ pub enum Error {
     /// The factoring does not partition exactly the task's variables, so it
     /// was built for a different task.
     FactoringMismatch,
+    /// The causal graph has an arc `from -> to` between two different
+    /// leaves, so the factoring is not a strict star; see
+    /// [`Factoring::check_star`].
+    NotStar {
+        /// Source variable of the arc.
+        from: VarId,
+        /// Target variable of the arc.
+        to: VarId,
+    },
 }
 
 impl fmt::Display for Error {
@@ -110,6 +119,9 @@ impl fmt::Display for Error {
                 write!(f, "leaf {leaf} has more than {MAX_LEAF_STATES} states")
             }
             Self::FactoringMismatch => write!(f, "the factoring belongs to a different task"),
+            Self::NotStar { from, to } => {
+                write!(f, "causal-graph arc {from} -> {to} connects two leaves")
+            }
         }
     }
 }
