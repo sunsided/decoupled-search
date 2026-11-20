@@ -8,23 +8,31 @@
 //! actions* (operators that are not confined to one leaf) and keep, for
 //! every leaf, the price of each leaf state reachable along the current
 //! path. They return a sequential [`Plan`] for the original task,
-//! cost-optimal for the first two.
+//! cost-optimal for the first two; [`Plan::validate`] checks one
+//! independently. [`Config`] chooses the dominance criterion ([`Pruning`])
+//! and whether leaves keep prices at all ([`Leaves`]).
 //!
 //! ```mermaid
 //! graph LR
-//!     task[sas_plus::Task] --> factoring[Factoring: fork, star, explicit]
+//!     task[sas_plus::Task] --> factoring[Factoring: auto, fork, star, explicit]
 //!     factoring --> search[search / astar / gbfs over decoupled states]
 //!     task --> search
-//!     heuristic[HMax / HFf] --> search
-//!     search --> plan[Plan: sequential]
+//!     config[Config: pruning, leaves] --> search
+//!     heuristic[HMax / HFf / MasHeuristic] --> search
+//!     search --> plan[Plan: sequential, validated]
 //! ```
 //!
 //! ## Status
 //!
 //! Pre-release, see `docs/design.md`: fork, inverted-fork, greedy star and
-//! explicit factorings; uniform-cost, A* and greedy search with leaf-state
-//! dominance pruning; `h^max` and `h^FF` on decoupled states. Tasks with
-//! axioms or conditional effects are rejected. The API will change.
+//! explicit factorings, scored and chosen by [`Factoring::auto`];
+//! uniform-cost, A* and greedy search with basic, frontier,
+//! effective-price and simulation dominance pruning; reachability-only
+//! leaves for greedy search; `h^max` and `h^FF` on decoupled states, and a
+//! merge-and-shrink adapter behind the `merge-and-shrink` feature.
+//! Conditional effects and axioms are supported where the decoupled
+//! semantics can express them and rejected with precise errors otherwise.
+//! The API will change.
 //!
 //! Repository: <https://github.com/sunsided/decoupled-search>
 
