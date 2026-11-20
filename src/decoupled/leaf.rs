@@ -5,7 +5,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::cmp::Reverse;
 
-use sas_plus::{Fact, OpId, Value};
+use sas_plus::{Fact, OpId, Value, VarId};
 
 use super::Prices;
 
@@ -54,6 +54,8 @@ pub(crate) struct LeafAction {
 /// A leaf factor whose states are mixed-radix ranks over its variables.
 #[derive(Clone, Debug)]
 pub(crate) struct Leaf {
+    /// The task variable of each slot.
+    pub(crate) vars: Vec<VarId>,
     /// Rank weight of each slot: the product of the domain sizes of all earlier slots.
     pub(crate) strides: Vec<usize>,
     /// Domain size of each slot.
@@ -173,6 +175,17 @@ impl Leaf {
         }
 
         steps
+    }
+
+    /// Lowers `out[offsets[var] + value]` to the cheapest price in `prices`
+    /// of a reached leaf state with `var = value`, for every leaf variable.
+    pub(crate) fn lower_fact_prices(&self, prices: &Prices, offsets: &[usize], out: &mut [Price]) {
+        for (rank, price) in prices.iter() {
+            for (slot, &var) in self.vars.iter().enumerate() {
+                let fact = &mut out[offsets[var] + self.value(rank, slot)];
+                *fact = (*fact).min(price);
+            }
+        }
     }
 
     /// The cheapest price of a reached leaf state that satisfies the leaf

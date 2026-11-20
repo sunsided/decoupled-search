@@ -31,6 +31,7 @@ extern crate alloc;
 
 mod decoupled;
 mod factoring;
+mod heuristic;
 mod search;
 
 use alloc::vec::Vec;
@@ -39,7 +40,8 @@ use core::fmt;
 use sas_plus::{OpId, TaskError, VarId};
 
 pub use factoring::Factoring;
-pub use search::search;
+pub use heuristic::{DecoupledHeuristic, FactPrices, HFf, HMax};
+pub use search::{astar, gbfs, search};
 
 /// The largest number of states a leaf may have; prices are stored densely
 /// per leaf state.

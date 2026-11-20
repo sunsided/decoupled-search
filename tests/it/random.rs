@@ -29,7 +29,7 @@ fn partitions(n: usize) -> Vec<Vec<Vec<usize>>> {
 }
 
 /// Every factoring tried on `task`.
-fn factorings(task: &Task) -> Vec<Factoring> {
+pub fn factorings(task: &Task) -> Vec<Factoring> {
     let explicit = partitions(task.num_variables())
         .into_iter()
         .map(|leaves| Factoring::new(task, leaves).expect("valid partition"));

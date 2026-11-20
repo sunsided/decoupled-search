@@ -14,6 +14,7 @@ use alloc::vec::Vec;
 
 use sas_plus::{Fact, OpId, Task, Value, VarId};
 
+use crate::heuristic::FactPrices;
 use crate::{Error, Factoring, MAX_LEAF_STATES};
 pub(crate) use leaf::{Leaf, Price, UNREACHED};
 use leaf::{LeafAction, LeafFact, LeafPart};
@@ -78,6 +79,11 @@ impl DecoupledState {
 pub(crate) struct DecoupledTask {
     /// Initial values of the center variables, indexed by center slot.
     initial_center: Vec<Value>,
+    /// The task variable of each center slot.
+    center_vars: Vec<VarId>,
+    /// Index of each task variable's first value in a [`FactPrices`]
+    /// vector, plus a final entry with the number of facts.
+    fact_offsets: Vec<usize>,
     /// The goal restricted to the center; `var` is the center slot.
     center_goal: Vec<Fact>,
     /// The compiled leaves, in [`Factoring::leaves`] order.
@@ -136,6 +142,8 @@ impl DecoupledTask {
                 .iter()
                 .map(|&v| task.initial.0[v])
                 .collect(),
+            center_vars: factoring.center().to_vec(),
+            fact_offsets: fact_offsets(task),
             center_goal: goal.center,
             leaves,
             globals,
@@ -203,6 +211,25 @@ impl DecoupledTask {
             .collect();
 
         DecoupledState { center, prices }
+    }
+
+    /// The cheapest price of every fact over the member states of `state`:
+    /// 0 for the center facts that hold, the cheapest reached leaf state
+    /// containing it for leaf facts.
+    pub(crate) fn fact_prices(&self, state: &DecoupledState) -> FactPrices<'_> {
+        let mut prices = vec![UNREACHED; *self.fact_offsets.last().expect("has a final entry")];
+        for (&var, &value) in self.center_vars.iter().zip(&state.center) {
+            prices[self.fact_offsets[var] + widen(value)] = 0;
+        }
+
+        for (leaf, leaf_prices) in self.leaves.iter().zip(&state.prices) {
+            leaf.lower_fact_prices(leaf_prices, &self.fact_offsets, &mut prices);
+        }
+
+        FactPrices {
+            offsets: &self.fact_offsets,
+            prices,
+        }
     }
 
     /// The cost still to pay in the leaves to reach the goal from `state`:
@@ -304,6 +331,7 @@ fn compile_leaf(task: &Task, vars: &[VarId], index: usize) -> Result<Leaf, Error
         .sum();
 
     Ok(Leaf {
+        vars: vars.to_vec(),
         strides,
         domains,
         size,
@@ -311,6 +339,20 @@ fn compile_leaf(task: &Task, vars: &[VarId], index: usize) -> Result<Leaf, Error
         goal: Vec::new(),
         actions: Vec::new(),
     })
+}
+
+/// The index of every variable's first value in a vector over all facts of
+/// `task`, plus a final entry with the number of facts.
+fn fact_offsets(task: &Task) -> Vec<usize> {
+    let mut offsets = Vec::with_capacity(task.num_variables() + 1);
+    let mut next = 0;
+    offsets.push(next);
+    for v in &task.variables {
+        next += widen(v.domain_size);
+        offsets.push(next);
+    }
+
+    offsets
 }
 
 /// Splits `facts` into center facts and per-leaf facts.

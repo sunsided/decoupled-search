@@ -1,8 +1,14 @@
-//! Uniform-cost decoupled search with dominance pruning.
+//! Uniform-cost, A* and greedy best-first decoupled search with dominance
+//! pruning.
+//!
+//! All three share one driver and differ in the open-list key: `g`,
+//! `g + h` or `h`. Uniform-cost search and A* stop once the popped key
+//! reaches the best solution cost found so far; greedy search stops at the
+//! first solution.
 //!
 //! ```mermaid
 //! graph LR
-//!     pop[pop lowest g] --> stop{g >= best?}
+//!     pop[pop lowest key] --> stop{done?}
 //!     stop -- yes --> done[reconstruct best]
 //!     stop -- no --> expand[global successors]
 //!     expand --> prune{dominated?}
@@ -20,7 +26,17 @@ use core::cmp::Reverse;
 use sas_plus::{Task, Value};
 
 use crate::decoupled::{DecoupledState, DecoupledTask, Price};
-use crate::{Error, Factoring, Plan};
+use crate::{DecoupledHeuristic, Error, Factoring, Plan};
+
+/// How the open list is ordered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Order {
+    /// By `g + h`, cost-optimal for admissible `h` (`h = 0` without a
+    /// heuristic, which is uniform-cost search).
+    Cost,
+    /// By `h` alone, stopping at the first solution.
+    Greedy,
+}
 
 /// A generated decoupled state.
 #[derive(Debug)]
@@ -36,11 +52,16 @@ struct Node {
 
 /// Search bookkeeping: all nodes, the open list, the dominance store and the
 /// best solution found so far.
-#[derive(Debug, Default)]
-struct Search {
+struct Search<'t> {
+    /// The task being searched.
+    task: &'t DecoupledTask,
+    /// The heuristic; `None` means `h = 0` without computing fact prices.
+    heuristic: Option<&'t dyn DecoupledHeuristic>,
+    /// The open-list order.
+    order: Order,
     /// Every node that survived pruning, indexed by node id.
     nodes: Vec<Node>,
-    /// Node ids ordered by `g`.
+    /// Node ids ordered by their key (`g + h` or `h`).
     open: BinaryHeap<Reverse<(Price, usize)>>,
     /// Node ids per center state, for dominance checks.
     by_center: BTreeMap<Vec<Value>, Vec<usize>>,
@@ -48,9 +69,12 @@ struct Search {
     best: Option<(Price, usize)>,
 }
 
-/// Finds a cheapest plan for `task` by decoupled search over `factoring`.
+/// Finds a cheapest plan for `task` by uniform-cost decoupled search over
+/// `factoring`.
 ///
-/// Returns `Ok(None)` if the task is unsolvable.
+/// Returns `Ok(None)` if the task is unsolvable. A generated state is pruned
+/// when a stored state with the same center has no higher `g` and no higher
+/// price for any leaf state.
 ///
 /// # Errors
 ///
@@ -94,18 +118,88 @@ struct Search {
 /// # Ok::<(), decoupled_search::Error>(())
 /// ```
 pub fn search(task: &Task, factoring: &Factoring) -> Result<Option<Plan>, Error> {
-    let decoupled = DecoupledTask::new(task, factoring)?;
-    let mut search = Search::default();
-    search.insert(&decoupled, decoupled.initial(), 0, None);
+    run(task, factoring, None, Order::Cost)
+}
 
-    while let Some(Reverse((g, id))) = search.open.pop() {
-        if search.best.is_some_and(|(cost, _)| g >= cost) {
+/// Finds a cheapest plan for `task` by decoupled A* over `factoring`, guided
+/// by `heuristic`.
+///
+/// The plan is cost-optimal if `heuristic` is admissible in the sense of
+/// [`DecoupledHeuristic::estimate`], as [`crate::HMax`] is. Pruning is the
+/// same as in [`search()`]; states the heuristic declares dead ends are
+/// pruned too. Returns `Ok(None)` if the task is unsolvable.
+///
+/// # Errors
+///
+/// As [`search()`].
+///
+/// # Examples
+///
+/// See [`crate::HMax`].
+pub fn astar(
+    task: &Task,
+    factoring: &Factoring,
+    heuristic: &impl DecoupledHeuristic,
+) -> Result<Option<Plan>, Error> {
+    run(task, factoring, Some(heuristic), Order::Cost)
+}
+
+/// Finds some plan for `task` by decoupled greedy best-first search over
+/// `factoring`, ordered by `heuristic` alone, and returns the first one
+/// found. The plan is valid but not necessarily cheapest.
+///
+/// A generated state is pruned when a stored state with the same center has
+/// no higher price for any leaf state, whatever its `g`: that state reaches
+/// every goal the pruned one reaches, so solvability is preserved. Returns
+/// `Ok(None)` if the task is unsolvable.
+///
+/// # Errors
+///
+/// As [`search()`].
+///
+/// # Examples
+///
+/// See [`crate::HFf`].
+pub fn gbfs(
+    task: &Task,
+    factoring: &Factoring,
+    heuristic: &impl DecoupledHeuristic,
+) -> Result<Option<Plan>, Error> {
+    run(task, factoring, Some(heuristic), Order::Greedy)
+}
+
+/// The search driver shared by [`search()`], [`astar`] and [`gbfs`].
+///
+/// # Errors
+///
+/// As [`search()`].
+fn run(
+    task: &Task,
+    factoring: &Factoring,
+    heuristic: Option<&dyn DecoupledHeuristic>,
+    order: Order,
+) -> Result<Option<Plan>, Error> {
+    let decoupled = DecoupledTask::new(task, factoring)?;
+    let mut search = Search {
+        task: &decoupled,
+        heuristic,
+        order,
+        nodes: Vec::new(),
+        open: BinaryHeap::new(),
+        by_center: BTreeMap::new(),
+        best: None,
+    };
+    search.insert(decoupled.initial(), 0, None);
+
+    while let Some(Reverse((key, id))) = search.open.pop() {
+        if search.is_done(key) {
             break;
         }
 
+        let g = search.nodes[id].g;
         for (action, state) in decoupled.successors(&search.nodes[id].state) {
             let g = g.saturating_add(decoupled.globals[action].cost);
-            search.insert(&decoupled, state, g, Some((id, action)));
+            search.insert(state, g, Some((id, action)));
         }
     }
 
@@ -114,22 +208,38 @@ pub fn search(task: &Task, factoring: &Factoring) -> Result<Option<Plan>, Error>
         .map(|(cost, id)| reconstruct::plan(&decoupled, &search.path(id), cost)))
 }
 
-impl Search {
-    /// Adds `state` reached at cost `g` unless a stored node dominates it,
-    /// and records it as the best solution if it is one.
-    fn insert(
-        &mut self,
-        task: &DecoupledTask,
-        state: DecoupledState,
-        g: Price,
-        parent: Option<(usize, usize)>,
-    ) {
+impl Search<'_> {
+    /// Whether the search can stop before expanding a node with open-list
+    /// key `key`: greedy search once any solution is known, otherwise once
+    /// `key` reaches the best solution cost (keys are lower bounds).
+    fn is_done(&self, key: Price) -> bool {
+        match self.order {
+            Order::Cost => self.best.is_some_and(|(cost, _)| key >= cost),
+            Order::Greedy => self.best.is_some(),
+        }
+    }
+
+    /// The heuristic estimate of `state`; 0 without a heuristic, `None` for
+    /// a dead end.
+    fn estimate(&self, state: &DecoupledState) -> Option<Price> {
+        self.heuristic
+            .map_or(Some(0), |h| h.estimate(&self.task.fact_prices(state)))
+    }
+
+    /// Adds `state` reached at cost `g` unless a stored node dominates it or
+    /// the heuristic declares it a dead end, and records it as the best
+    /// solution if it is one.
+    fn insert(&mut self, state: DecoupledState, g: Price, parent: Option<(usize, usize)>) {
         if self.is_dominated(&state, g) {
             return;
         }
 
+        let Some(h) = self.estimate(&state) else {
+            return;
+        };
+
         let id = self.nodes.len();
-        if let Some(rest) = task.goal_price(&state) {
+        if let Some(rest) = self.task.goal_price(&state) {
             let cost = g.saturating_add(rest);
             if self.best.is_none_or(|(best, _)| cost < best) {
                 self.best = Some((cost, id));
@@ -140,13 +250,19 @@ impl Search {
             .entry(state.center.clone())
             .or_default()
             .push(id);
-        self.open.push(Reverse((g, id)));
+        let key = match self.order {
+            Order::Cost => g.saturating_add(h),
+            Order::Greedy => h,
+        };
+        self.open.push(Reverse((key, id)));
         self.nodes.push(Node { state, g, parent });
     }
 
-    /// Whether a stored node has the same center, no higher `g` and no higher
-    /// price anywhere. Such a node reaches every goal `state` reaches, at no
-    /// higher cost.
+    /// Whether a stored node has the same center, no higher price anywhere
+    /// and, unless the search is greedy, no higher `g`. Such a node reaches
+    /// every goal `state` reaches, and at no higher cost if `g` is compared.
+    /// Leaf prices exclude `g`, so comparing prices alone would lose
+    /// optimality.
     ///
     /// shortcut: linear scan per center state; replace with leaf-state
     /// dominance (design milestone 2) when stores get long.
@@ -154,7 +270,7 @@ impl Search {
         self.by_center.get(&state.center).is_some_and(|ids| {
             ids.iter().any(|&id| {
                 let node = &self.nodes[id];
-                node.g <= g && node.state.prices_at_most(state)
+                (self.order == Order::Greedy || node.g <= g) && node.state.prices_at_most(state)
             })
         })
     }
