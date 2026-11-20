@@ -197,6 +197,12 @@ pub trait DecoupledHeuristic {
     fn estimate(&self, facts: &FactPrices<'_>) -> Option<u64>;
 }
 
+impl<H: DecoupledHeuristic + ?Sized> DecoupledHeuristic for &H {
+    fn estimate(&self, facts: &FactPrices<'_>) -> Option<u64> {
+        (**self).estimate(facts)
+    }
+}
+
 /// The max heuristic `h^max` (Bonet and Geffner 2001) seeded with fact
 /// prices: admissible on decoupled states.
 ///

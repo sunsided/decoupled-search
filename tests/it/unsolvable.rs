@@ -1,7 +1,7 @@
 //! A task whose prices grow forever along a center loop, so only dominance
 //! pruning makes the search terminate.
 
-use decoupled_search::{DecoupledHeuristic, FactPrices, Factoring, astar, gbfs};
+use decoupled_search::{Config, DecoupledHeuristic, FactPrices, Factoring, Leaves, astar, gbfs};
 use sas_plus::{Effect, Fact, Operator, State, Task, Variable};
 
 use crate::checked_cost;
@@ -64,6 +64,14 @@ fn growing_prices_terminate_on_unsolvable_task() {
     // h^max prunes the root here, so a blind heuristic exercises dominance.
     assert_eq!(astar(&task, &factoring, &Blind), Ok(None));
     assert_eq!(gbfs(&task, &factoring, &Blind), Ok(None));
+    let reachability = Config {
+        leaves: Leaves::Reachability,
+        ..Config::default()
+    };
+    let outcome = reachability
+        .gbfs(&task, &factoring, &Blind)
+        .expect("supported");
+    assert_eq!(outcome.plan, None);
 }
 
 /// The zero heuristic, which never prunes.

@@ -1,14 +1,14 @@
 //! Greedy best-first decoupled search with `h^FF` and `h^max`: valid plans,
 //! the same solvability as Dijkstra, and costs no lower than the optimum.
 
-use decoupled_search::{Factoring, HFf, HMax, gbfs};
+use decoupled_search::{Config, Error, Factoring, HFf, HMax, Leaves, gbfs};
 use sas_plus::Task;
 use sas_plus::random::{RandomTaskParams, random_task};
 
 use crate::dijkstra::optimal_cost;
 use crate::random::factorings;
 use crate::star::{SEEDS, random_star_task, strategies};
-use crate::validated;
+use crate::{PRUNINGS, validated};
 
 /// Checks greedy search under `factoring` with both heuristics against the
 /// optimal cost `expected`, and returns how many runs found a plan.
@@ -64,4 +64,56 @@ fn greedy_search_is_sound_on_random_tasks() {
     }
 
     assert!(solved > SEEDS, "only {solved} solved runs");
+}
+
+/// Greedy search with reachability-only leaves under every dominance
+/// criterion: valid plans exactly when Dijkstra finds one, never cheaper
+/// than the optimum, and the cost is the plan's operator cost.
+#[test]
+fn reachability_only_gbfs_matches_dijkstra_solvability() {
+    let random = (0..SEEDS).map(|seed| random_task(seed, RandomTaskParams::default()));
+    let mut solved = 0;
+    for task in (0..SEEDS).map(random_star_task).chain(random) {
+        let expected = optimal_cost(&task);
+        let ff = HFf::new(&task);
+        for factoring in factorings(&task) {
+            for pruning in PRUNINGS {
+                let config = Config {
+                    pruning,
+                    leaves: Leaves::Reachability,
+                    ..Config::default()
+                };
+                let outcome = config.gbfs(&task, &factoring, &ff).expect("supported");
+                let cost = validated(&task, outcome.plan);
+                assert_eq!(
+                    cost.is_some(),
+                    expected.is_some(),
+                    "{config:?}, {factoring:?}"
+                );
+                assert!(cost >= expected, "{cost:?} beats {expected:?}");
+                solved += u64::from(cost.is_some());
+            }
+        }
+    }
+
+    assert!(solved > SEEDS, "only {solved} solved runs");
+}
+
+/// Reachability-only leaves are refused for cost-optimal search.
+#[test]
+fn reachability_only_leaves_need_greedy_search() {
+    let task = random_star_task(0);
+    let factoring = Factoring::fork(&task);
+    let config = Config {
+        leaves: Leaves::Reachability,
+        ..Config::default()
+    };
+    assert_eq!(
+        config.search(&task, &factoring),
+        Err(Error::ReachabilityNotOptimal)
+    );
+    assert_eq!(
+        config.astar(&task, &factoring, &HMax::new(&task)),
+        Err(Error::ReachabilityNotOptimal)
+    );
 }

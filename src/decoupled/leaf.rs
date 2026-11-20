@@ -49,6 +49,13 @@ pub(crate) struct LeafEffect {
     pub(crate) fact: LeafFact,
 }
 
+impl LeafEffect {
+    /// Whether the effect has conditions on the center.
+    pub(crate) fn reads_center(&self) -> bool {
+        !self.center_cond.is_empty()
+    }
+}
+
 /// The part of an operator that reads or writes one leaf.
 #[derive(Clone, Debug)]
 pub(crate) struct LeafPart {
@@ -57,6 +64,13 @@ pub(crate) struct LeafPart {
     /// Effects on this leaf's variables, in operator order: a later firing
     /// effect on the same variable wins.
     pub(crate) eff: Vec<LeafEffect>,
+}
+
+impl LeafPart {
+    /// Whether any effect depends on the center.
+    pub(crate) fn reads_center(&self) -> bool {
+        self.eff.iter().any(LeafEffect::reads_center)
+    }
 }
 
 /// An operator whose effects all lie in one leaf and whose preconditions and
@@ -131,6 +145,30 @@ impl Leaf {
             center,
             derived,
         }
+    }
+
+    /// The view of a leaf that does not read the center (see
+    /// [`Leaf::reads_center`]), valid under every center. Center
+    /// preconditions of leaf actions are not checked by its rank-level
+    /// operations, only by [`View::close`], which must not be called on it.
+    pub(crate) fn static_view(&self) -> View<'_> {
+        debug_assert!(self.derived.is_empty(), "derived slots read the center");
+        View {
+            leaf: self,
+            center: &[],
+            derived: Vec::new(),
+        }
+    }
+
+    /// Whether the leaf's behaviour depends on the center beyond the center
+    /// preconditions of its leaf actions: an effect on it (of a leaf action
+    /// or of a global action in `parts`) has center conditions, or a derived
+    /// variable is attached to it. Dominance analyses that hold "for every
+    /// center" fall back to plain price comparison on such leaves.
+    pub(crate) fn reads_center<'p>(&self, parts: impl IntoIterator<Item = &'p LeafPart>) -> bool {
+        !self.derived.is_empty()
+            || self.actions.iter().any(|a| a.part.reads_center())
+            || parts.into_iter().any(LeafPart::reads_center)
     }
 
     /// The values of the attached derived variables for every rank under

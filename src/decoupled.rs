@@ -108,6 +108,19 @@ impl DecoupledTask {
         compile::compile(task, factoring)
     }
 
+    /// The same task with leaf prices replaced by plain reachability: every
+    /// reached leaf state has price 0, and leaf action costs only enter the
+    /// plan, not the search.
+    pub(crate) fn into_reachability_only(mut self) -> Self {
+        self.reachability_only = true;
+        self
+    }
+
+    /// Whether prices only record reachability.
+    pub(crate) fn is_reachability_only(&self) -> bool {
+        self.reachability_only
+    }
+
     /// The view of leaf `leaf` under center state `center`.
     pub(crate) fn view<'a>(&'a self, leaf: usize, center: &'a [Value]) -> View<'a> {
         self.leaves[leaf].view(&self.axioms, center)

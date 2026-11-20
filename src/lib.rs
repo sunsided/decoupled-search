@@ -45,7 +45,7 @@ use sas_plus::{OpId, TaskError, VarId};
 pub use factoring::Factoring;
 pub use heuristic::{DecoupledHeuristic, FactPrices, HFf, HMax};
 pub use plan::{Plan, PlanError};
-pub use search::{astar, gbfs, search};
+pub use search::{Config, Leaves, Outcome, Pruning, Statistics, astar, gbfs, search};
 
 /// The largest number of states a leaf may have. Leaf reachability works on
 /// dense price vectors of this size, and stored leaf-state ranks fit in
@@ -92,7 +92,7 @@ pub enum Error {
         /// The offending derived variable.
         var: VarId,
     },
-    /// Leaf prices without costs (reachability-only leaves) were requested
+    /// Leaf prices without costs ([`Leaves::Reachability`]) were requested
     /// for a cost-optimal search, which needs the prices.
     ReachabilityNotOptimal,
     /// A leaf names variable `var`, which the task does not have.

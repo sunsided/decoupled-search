@@ -29,3 +29,7 @@ unsafe_code = "forbid"
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 missing_docs_in_private_items = "warn"
+
+# The cross-checks run thousands of searches; unoptimised they take minutes.
+[profile.test]
+opt-level = 1

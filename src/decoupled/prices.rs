@@ -17,7 +17,9 @@ use super::leaf::{Price, UNREACHED};
 pub(crate) struct Prices {
     /// Ranks of the reached leaf states, strictly ascending.
     ranks: Vec<u16>,
-    /// The price of each rank in [`Prices::ranks`], never [`UNREACHED`].
+    /// The price of each rank in [`Prices::ranks`], never [`UNREACHED`];
+    /// empty if every reached state has price 0, which saves the prices in
+    /// reachability-only search and for leaves without costs.
     prices: Vec<Price>,
 }
 
@@ -38,6 +40,10 @@ impl Prices {
             }
         }
 
+        if out.prices.iter().all(|&p| p == 0) {
+            out.prices = Vec::new();
+        }
+
         out
     }
 
@@ -54,22 +60,11 @@ impl Prices {
 
     /// The reached leaf states as `(rank, price)`, by ascending rank.
     pub(crate) fn iter(&self) -> impl Iterator<Item = (usize, Price)> + '_ {
+        let zeros = core::iter::repeat_n(0, self.ranks.len() - self.prices.len());
         self.ranks
             .iter()
             .map(|&r| usize::from(r))
-            .zip(self.prices.iter().copied())
-    }
-
-    /// Whether every leaf state reached in `other` is reached in `self` at no
-    /// higher price. Unreached states compare as infinite, so states reached
-    /// only in `self` do not matter.
-    pub(crate) fn at_most(&self, other: &Self) -> bool {
-        let mut mine = self.iter().peekable();
-        other.iter().all(|(rank, price)| {
-            while mine.next_if(|&(r, _)| r < rank).is_some() {}
-            mine.next_if(|&(r, _)| r == rank)
-                .is_some_and(|(_, p)| p <= price)
-        })
+            .zip(self.prices.iter().copied().chain(zeros))
     }
 }
 
@@ -84,24 +79,11 @@ mod tests {
         let sparse = Prices::from_dense(&dense);
         assert_eq!(sparse.iter().collect::<Vec<_>>(), [(1, 3), (3, 0), (4, 7)]);
         assert_eq!(sparse.to_dense(dense.len()), dense);
-    }
 
-    /// `at_most` matches the dense pointwise comparison.
-    #[test]
-    fn at_most_matches_dense_comparison() {
-        let vectors = [
-            [UNREACHED, UNREACHED, UNREACHED],
-            [0, UNREACHED, 2],
-            [0, 1, 2],
-            [1, 1, UNREACHED],
-            [UNREACHED, 0, 3],
-        ];
-        for a in &vectors {
-            for b in &vectors {
-                let dense = a.iter().zip(b).all(|(x, y)| x <= y);
-                let sparse = Prices::from_dense(a).at_most(&Prices::from_dense(b));
-                assert_eq!(sparse, dense, "{a:?} <= {b:?}");
-            }
-        }
+        let zeros = [0, UNREACHED, 0];
+        let sparse = Prices::from_dense(&zeros);
+        assert!(sparse.prices.is_empty(), "all-zero prices are not stored");
+        assert_eq!(sparse.iter().collect::<Vec<_>>(), [(0, 0), (2, 0)]);
+        assert_eq!(sparse.to_dense(zeros.len()), zeros);
     }
 }
