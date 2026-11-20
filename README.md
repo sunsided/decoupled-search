@@ -38,7 +38,7 @@ use decoupled_search::{Config, Factoring, HMax, Pruning, astar, search};
 let factoring = Factoring::auto(&task);
 let plan = search(&task, &factoring)?;
 let plan = astar(&task, &factoring, &HMax::new(&task))?;
-plan.expect("solvable").validate(&task)?;
+assert_eq!(plan.expect("solvable").validate(&task), Ok(()));
 
 let outcome = Config { pruning: Pruning::Basic, ..Config::default() }.search(&task, &factoring)?;
 println!("{:?}", outcome.statistics);

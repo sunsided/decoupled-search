@@ -1,84 +1,6 @@
-//! Dominance pruning of decoupled states (Torralba, Gnad, Dubbert and
-//! Hoffmann 2016), generalised to this crate's global actions and extended
-//! with a shared `g` budget.
-//!
-//! A stored state `t` *dominates* a generated state `n` with the same
-//! center if every completion of `n` can be turned into a completion of `t`
-//! with the same remaining global actions and no higher total cost. `n` is
-//! then pruned. Each [`Pruning`] criterion bounds, for every leaf state `x`
-//! reached in `n`, what `t` must pay to do whatever `n` does from `x`: a
-//! *bound* `D_t(x)` with the property
-//!
-//! > (★) for every center path `π` from `t` and every `π`-compliant leaf path
-//! > `ρ` from `x`, `t` has a compliant leaf path that does what `ρ` does (ends
-//! > in a goal leaf state if `ρ` does, satisfies the same global
-//! > preconditions) at total leaf cost at most `D_t(x) + cost(ρ)`.
-//!
-//! The criteria:
-//!
-//! - [`Pruning::Basic`]: `D_t(x) = price_t(x)`, on every reached `x`
-//!   (Gnad and Hoffmann).
-//! - [`Pruning::Frontier`]: the same bound, compared only on the frontier
-//!   of `n` (Definition 2 of the paper): leaf states that are *anchored* or
-//!   that some leaf action leaves at a strictly cheaper price than its
-//!   target's. If `ρ` starts outside the frontier, its first state on the
-//!   frontier is no dearer in `n` than `x` plus the cost to get there.
-//! - [`Pruning::EffectivePrices`]: `D_t` is the effective price
-//!   (Definition 4): the point-wise least `p` with `p(x) = price_t(x)` on
-//!   anchored states and `p(x) = min(price_t(x), max_{x -a-> y} p(y) - cost(a))`
-//!   elsewhere, over leaf actions regardless of their center preconditions.
-//! - [`Pruning::Simulation`]: `D_t(x) = min_{x ⪯ y} price_t(y)` for the leaf
-//!   simulation `⪯` of [`simulation`] (Definition 6).
-//! - [`Pruning::EffectiveSimulation`]: effective prices over simulation
-//!   bounds (Definition 7), subsuming all others.
-//!
-//! *Anchored* leaf states generalise the paper's single goal leaf state to
-//! global actions that touch leaves: a leaf state is anchored if it
-//! satisfies the leaf goal or the leaf preconditions of a global action's
-//! part on the leaf (every state is anchored if some part has none). An
-//! unanchored leaf state can only be left by leaf actions, which is what the
-//! frontier and effective-price arguments need; the anchored ones are where
-//! the leaf path meets the goal or a global action, so their bound must be a
-//! real price.
-//!
-//! *Proof of (★) for effective prices.* Let `ρ` visit `x = s0, ..., sm`. Take
-//! the first `i` with `p(s_i) = S(s_i)`, where `S` is `price_t` (or the
-//! simulation bound); it exists because `ρ` ends in a goal leaf state, which
-//! is anchored. Before `i` all states are unanchored, so every step is a
-//! leaf action (a global action touching the leaf would anchor it) and
-//! `p(s_j) >= p(s_{j+1}) - cost(a_{j+1})`; summing,
-//! `p(s_i) <= p(x) + cost(s0..s_i)`. `t` reaches `s_i` (or a simulating
-//! state `y`, then mirrors the rest of `ρ` from `y` by the simulation) at
-//! price `S(s_i) = p(s_i)` and follows the rest of `ρ`. States whose least
-//! value stays at `-∞` cannot reach an anchored state at all, so no
-//! completion uses them. The frontier and plain cases are special cases
-//! with `p = price_t` and simulation bounds with `p = S`.
-//!
-//! *The `g` budget.* Leaf prices exclude `g`. For each leaf let
-//! `δ_L = max_x (D_t(x) - price_n(x))` over the compared states `x`. A
-//! completion of `n` through leaf states `x_L` costs
-//! `g(n) + Σ_L (price_n(x_L) + rest_L) + global rest`, and by (★) one of `t`
-//! costs at most `g(t) + Σ_L (price_n(x_L) + δ_L + rest_L) + global rest`.
-//! So `t` dominates `n` for cost-optimal search if
-//! `g(t) + Σ_L δ_L <= g(n)`, with `fold_g`; without it, the classic
-//! condition `g(t) <= g(n)` and `δ_L <= 0` for every leaf is used. Comparing
-//! `g + price` per leaf state instead would be unsound with two or more
-//! leaves: `g` is paid once but would be credited per leaf (the
-//! `slack_is_shared_between_leaves` test is a counterexample). For greedy
-//! search only reachability matters: `t` dominates `n` if every compared
-//! bound is finite.
-//!
-//! *Optimality of A* with this pruning.* Say a stored node *covers* cost `C`
-//! via global actions `π` if applying `π` to it yields a goal state with
-//! total cost at most `C`. While no solution of cost `C*` is recorded, take
-//! a covering stored node with shortest `π`. If `π` is empty, the node is a
-//! goal and its cost `<= C*` was recorded when it was stored. Otherwise, if
-//! it were closed, its successor along `π[0]` was either stored (covering
-//! via a shorter path) or pruned by a stored node that covers via the same,
-//! shorter `π[1..]` (dominance keeps the remaining global actions), or
-//! declared a dead end, which an admissible heuristic only does without
-//! completions. So the node is open, with `f <= C*`, and the search does
-//! not stop before recording `C*`.
+//! Dominance pruning of decoupled states: the criteria of [`Pruning`],
+//! whose documentation states and proves them, and the per-leaf analyses
+//! they need (anchored states, leaf transitions, [`simulation`]).
 //!
 //! Leaves whose transitions read the center (center-conditioned effects,
 //! derived slots) or that have more than
@@ -247,7 +169,7 @@ impl Dominance {
                 return false;
             };
 
-            if !self.fold_g && delta > 0 {
+            if !self.greedy && !self.fold_g && delta > 0 {
                 return false;
             }
 

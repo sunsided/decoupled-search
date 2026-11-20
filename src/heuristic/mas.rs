@@ -1,43 +1,6 @@
 //! A merge-and-shrink heuristic on decoupled states, from the
-//! [`merge_and_shrink`] crate (feature `merge-and-shrink`).
-//!
-//! A merge-and-shrink abstraction maps each explicit state through a merge
-//! tree of lookup tables to an abstract state with an admissible goal
-//! distance. A decoupled state stands for many explicit states at once, so
-//! [`MasHeuristic`] evaluates the tree on [`FactPrices`] instead of on one
-//! state: bottom-up, every tree node gets the cheapest *price bound* of each
-//! of its abstract states, and the estimate is the cheapest
-//! `bound + distance` at the root.
-//!
-//! *Admissibility.* For a tree node `n` over variables `V(n)`, let
-//! `F(n)` be the factors (the leaves, and the center as one more) that
-//! `V(n)` touches. For a member state `s`, let `P_n(s)` be the sum of the
-//! prices `s` pays in the factors of `F(n)`. We show by induction that
-//! `cost_n(a) <= P_n(s)` for every member state `s` that `n` maps to `a`:
-//!
-//! - at a variable `v`, `cost(a)` is the cheapest price of a fact `v = x`
-//!   with `x` mapped to `a`, and the price of `v = s[v]` is at most what `s`
-//!   pays in `v`'s factor, by the definition of [`FactPrices`];
-//! - at a product of children `l` and `r` that touch disjoint sets of
-//!   factors, `P_n = P_l + P_r`, so the sum of the children's bounds is a
-//!   bound;
-//! - if they share a factor, prices of one factor must not be counted twice
-//!   (two variables of one leaf are bought with one leaf state), so the
-//!   bound is the larger of the two, as `P_n >= max(P_l, P_r)`.
-//!
-//! At the root `F` contains every factor, so a member state `s` mapped to
-//! `a` costs at least `cost(a)` to reach and at least `dist(a)` (the
-//! abstraction is admissible) to complete; the minimum over all abstract
-//! states is a lower bound on the cheapest completion through any member
-//! state. Pruned abstract states (`None` in a table) are dead ends or
-//! unreachable from the initial state; every member state of a decoupled
-//! state is reachable, so skipping them is safe.
-//!
-//! This crate builds the abstraction itself from the public parts of
-//! [`merge_and_shrink`], because [`merge_and_shrink::MergeAndShrinkHeuristic`]
-//! keeps its merge tree private. Label reduction is not public either, so
-//! [`MergeAndShrink::label_reduction`] is ignored; that only weakens
-//! shrinking, never admissibility.
+//! [`merge_and_shrink`] crate (feature `merge-and-shrink`). See
+//! [`MasHeuristic`] for the evaluation and its admissibility proof.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -84,6 +47,48 @@ struct Evaluated {
 
 /// A merge-and-shrink heuristic adapted to decoupled states; admissible, so
 /// it can drive [`crate::astar`].
+///
+/// A merge-and-shrink abstraction maps each explicit state through a merge
+/// tree of lookup tables to an abstract state with an admissible goal
+/// distance. A decoupled state stands for many explicit states at once, so
+/// the adapter evaluates the tree on [`FactPrices`] instead of on one state:
+/// bottom-up, every tree node gets the cheapest *price bound* of each of its
+/// abstract states, and the estimate is the cheapest `bound + distance` at
+/// the root.
+///
+/// # Admissibility
+///
+/// For a tree node `n`, let `F(n)` be the factors (the leaves, and the
+/// center as one more) that its variables touch, and for a member state
+/// `s` let `P_n(s)` be the sum of the prices `s` pays in the factors of
+/// `F(n)`. By induction, `cost_n(a) <= P_n(s)` for every member state `s`
+/// that `n` maps to `a`:
+///
+/// - at a variable `v`, `cost(a)` is the cheapest price of a fact `v = x`
+///   with `x` mapped to `a`, and the price of `v = s[v]` is at most what `s`
+///   pays in `v`'s factor, by the contract of [`FactPrices`];
+/// - at a product of children `l` and `r` that touch disjoint sets of
+///   factors, `P_n = P_l + P_r`, so the sum of the children's bounds is a
+///   bound;
+/// - if they share a factor, its price must not be counted twice (two
+///   variables of one leaf are bought with one leaf state), and
+///   `P_n >= max(P_l, P_r)` makes the larger bound a bound.
+///
+/// At the root `F` contains every factor, so a member state `s` mapped to
+/// `a` costs at least `cost(a)` to reach and at least `dist(a)` (the
+/// abstraction is admissible) to complete; the minimum over all abstract
+/// states is a lower bound on the cheapest completion through any member
+/// state. Pruned abstract states (`None` in a table) are dead ends or
+/// unreachable from the initial state; every member state of a decoupled
+/// state is reachable, so skipping them is safe.
+///
+/// # Construction
+///
+/// [`merge_and_shrink::MergeAndShrinkHeuristic`] keeps its merge tree
+/// private, so [`MasHeuristic::build`] re-runs the merge loop from the
+/// public parts of [`merge_and_shrink`]. Label reduction is not public
+/// either, so [`MergeAndShrink::label_reduction`] is ignored; that only
+/// weakens shrinking, never admissibility.
 ///
 /// # Examples
 ///

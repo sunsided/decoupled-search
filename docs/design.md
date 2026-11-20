@@ -66,15 +66,17 @@ variables: the strategies move them to the center (see
 
 *Scoring.* `Factoring::score` compiles the factoring with the search's own
 operator classification and reports the number of leaves, *mobile* leaves
-(leaves with at least one leaf action, so they move without global
-actions), leaf and global actions, the leaf-action share, and the largest
-and total leaf size. `Factoring::auto` scores every `Strategy` and keeps
-the best by, in order: at least two mobile leaves (decoupling pays off by
-not enumerating combinations of leaf states across leaves, the reason Gnad,
-Poser and Hoffmann 2017 abstain below two leaves), the larger leaf-action
-share (an exact fraction), more mobile leaves, the smaller largest leaf,
-and the earlier strategy. Factorings the search would reject are skipped;
-without any mobile leaf the result is the factoring without leaves
+(our definition: leaves with at least one leaf action), leaf and global
+actions, the leaf-action share, and the largest and total leaf size; these
+are the quantities Gnad, Poser and Hoffmann (2017) rank by, but their exact
+definitions and ranking were not checked against the paper.
+`Factoring::auto` scores every `Strategy` and keeps the best by, in order:
+at least two mobile leaves (Torralba et al. 2016 report that their strategy
+abstains below two leaves, since decoupling pays off by not enumerating
+combinations of leaf states across leaves), the larger leaf-action share
+(an exact fraction), more mobile leaves, the smaller largest leaf, and the
+earlier strategy. Factorings the search would reject are skipped; without
+any mobile leaf the result is the factoring without leaves
 (explicit search). The ranking is ours, not the paper's.
 
 ## Decoupled state and pricing

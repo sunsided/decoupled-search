@@ -1,10 +1,14 @@
 //! Scoring factorings, and choosing among the strategies automatically.
 //!
-//! In the spirit of Gnad, Poser and Hoffmann (IJCAI 2017), who rank
-//! factorings by how much of the task the leaves absorb and require at
-//! least two *mobile* leaves (leaves with actions of their own), since the
-//! gain of decoupled search comes from not enumerating combinations of leaf
-//! states across leaves. The ranking in [`Factoring::auto`] is our own.
+//! The scored quantities (leaf-action share, leaf sizes, mobile leaves) are
+//! those Gnad, Poser and Hoffmann (IJCAI 2017) rank factorings by, but
+//! neither their exact definitions nor their ranking were checked against
+//! the paper. Here a leaf is *mobile* if it has at least one leaf action.
+//! Torralba, Gnad, Dubbert and Hoffmann (IJCAI 2016) report that the
+//! strategy they use abstains on tasks with fewer than two leaves, because
+//! the gain of decoupled search comes from not enumerating combinations of
+//! leaf states across leaves; [`Factoring::auto`] prefers two mobile leaves
+//! for the same reason. The ranking itself is our own.
 
 use core::cmp::Reverse;
 

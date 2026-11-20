@@ -7,6 +7,7 @@ use sas_plus::random::{RandomTaskParams, random_task};
 
 use crate::checked_cost;
 use crate::dijkstra::optimal_cost;
+use crate::star::strategies;
 
 /// Number of random tasks per test.
 const SEEDS: u64 = 200;
@@ -131,7 +132,8 @@ fn check_or_reject(params: RandomTaskParams) -> (u64, u64) {
     for seed in 0..SEEDS {
         let task = random_task(seed, params);
         let expected = optimal_cost(&task);
-        for factoring in factorings(&task) {
+        let strategies = strategies(&task).into_iter().map(|(_, f)| f);
+        for factoring in factorings(&task).into_iter().chain(strategies) {
             match search(&task, &factoring) {
                 Err(e) if is_semantic_rejection(&e) => rejected += 1,
                 Err(e) => panic!("seed {seed}: unexpected {e}"),

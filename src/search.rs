@@ -43,16 +43,106 @@ enum Order {
 
 /// The dominance criterion that prunes generated decoupled states.
 ///
-/// Every criterion preserves optimality of uniform-cost search and A*, and
-/// completeness of greedy search; the dominance module's documentation
-/// proves it for this crate's generalised global actions (see
-/// `docs/design.md`). Following Torralba, Gnad, Dubbert and Hoffmann
-/// (2016), [`Pruning::Frontier`] subsumes [`Pruning::Basic`],
+/// A stored state `t` *dominates* a generated state `n` with the same
+/// center if every completion of `n` can be turned into a completion of `t`
+/// with the same remaining global actions and no higher total cost; `n` is
+/// then pruned. The criteria are those of Torralba, Gnad, Dubbert and
+/// Hoffmann (IJCAI 2016), generalised to this crate's global actions, which
+/// may read and write leaves under any partition, and to partial leaf
+/// goals. [`Pruning::Frontier`] subsumes [`Pruning::Basic`],
 /// [`Pruning::EffectivePrices`] subsumes [`Pruning::Frontier`],
 /// [`Pruning::Simulation`] subsumes [`Pruning::Basic`], and
 /// [`Pruning::EffectiveSimulation`] subsumes all; effective prices and
-/// simulation are incomparable. Stronger criteria prune more but cost more
-/// per check.
+/// simulation are incomparable (as in the paper). Stronger criteria prune
+/// more but cost more: simulation is computed once per search and leaf.
+///
+/// # Anchored leaf states
+///
+/// The paper has one goal leaf state, and only leaf actions move a leaf.
+/// Here, a leaf state is *anchored* if it satisfies the leaf goal or the
+/// leaf preconditions of some global action's part on the leaf (every state
+/// is, if some part has no leaf precondition). An unanchored state can only
+/// be left by leaf actions; a completion's leaf path ends in a goal leaf
+/// state and meets every global action that touches the leaf in an
+/// anchored state.
+///
+/// # The per-leaf property
+///
+/// Each criterion yields, per leaf `L`, a slack `δ_L` such that:
+///
+/// > (★) for every center path `π` from `n` and every `π`-compliant leaf
+/// > path `ρ` that a completion of `n` takes from a reached leaf state `x`,
+/// > `t` has a `π`-compliant leaf path that ends in a goal leaf state and
+/// > satisfies the same global preconditions, at total leaf cost at most
+/// > `price_n(x) + δ_L + cost(ρ)`.
+///
+/// All criteria but the frontier one give a *bound* `D_t(x)` with "`t` can
+/// do what `ρ` does from `x` at leaf cost at most `D_t(x) + cost(ρ)`"; then
+/// `δ_L = max_x (D_t(x) - price_n(x))` over the reached states `x` of `n`
+/// satisfies (★).
+///
+/// - [`Pruning::Basic`]: `D_t(x) = price_t(x)`. `t` reaches `x` at that
+///   price and follows `ρ`.
+/// - [`Pruning::Simulation`]: `D_t(x) = min_{x ⪯ y} price_t(y)` over the
+///   reached `y` that simulate `x` (see the variant). `t` reaches `y` and
+///   mirrors `ρ`.
+/// - [`Pruning::EffectivePrices`]: `D_t = p`, the point-wise least function
+///   with `p(x) = S(x)` on anchored states and
+///   `p(x) = min(S(x), max_{x -a-> y} p(y) - cost(a))` elsewhere, over leaf
+///   actions regardless of their center preconditions, where
+///   `S = price_t`. Proof: let `ρ` visit `x = s_0, ..., s_m` and take the
+///   first `i` with `p(s_i) = S(s_i)`; it exists because `ρ` ends in a goal
+///   leaf state, which is anchored. Before `i` all states are unanchored,
+///   so every step is a leaf action and `p(s_j) >= p(s_{j+1}) - cost(a_{j+1})`;
+///   summing, `S(s_i) = p(s_i) <= p(x) + cost(s_0 .. s_i)`. `t` reaches `s_i`
+///   at `S(s_i)` and follows the rest of `ρ`. States whose least value is
+///   `-∞` reach no anchored state, so no completion uses them.
+/// - [`Pruning::EffectiveSimulation`]: the same with `S` the simulation
+///   bound; at `s_i`, `t` reaches a simulating `y` and mirrors the rest.
+/// - [`Pruning::Frontier`]: `δ_L = max_x (price_t(x) - price_n(x))` over the
+///   reached states `x` on the frontier of `n`: anchored, or left by some
+///   leaf action `x -a-> y` with `price_n(x) + cost(a) < price_n(y)`. Proof:
+///   if `ρ` starts outside the frontier, every leaf action out of a
+///   non-frontier state `s_j` reaches `s_{j+1}` with
+///   `price_n(s_{j+1}) <= price_n(s_j) + cost(a_{j+1})`, so the first
+///   frontier state `s_k` of `ρ` (it exists, the goal state is anchored)
+///   has `price_n(s_k) <= price_n(x) + cost(s_0 .. s_k)`; `t` reaches `s_k`
+///   at `price_t(s_k) <= price_n(s_k) + δ_L` and follows the rest of `ρ`.
+///
+/// # The `g` budget
+///
+/// Leaf prices exclude `g`. A completion of `n` through leaf states `x_L`
+/// costs `g(n) + Σ_L (price_n(x_L) + cost(ρ_L)) + c`, with `c` the cost of
+/// the remaining global actions, and by (★) `t` has one costing at most
+/// `g(t) + Σ_L (price_n(x_L) + δ_L + cost(ρ_L)) + c`. So `t` dominates `n`
+/// for cost-optimal search if `g(t) + Σ_L δ_L <= g(n)`, which
+/// [`Config::fold_g`] uses; without it, the classic condition `g(t) <= g(n)`
+/// and `δ_L <= 0` for every leaf. Comparing `g + price` per leaf state
+/// instead is unsound with two or more leaves, because `g` is paid once but
+/// would be credited per leaf: with `g(t) = 0` and both leaves at price 10,
+/// `g(n) = 10` and both at 0, every leaf ties at 10, yet completing both
+/// costs 20 from `t` and 10 from `n`. Greedy search only needs
+/// reachability: `t` dominates `n` if every `δ_L` is finite.
+///
+/// # Optimality
+///
+/// Say a stored node *covers* cost `C` via global actions `π` if `π` leads
+/// it to a goal state with total cost at most `C`. While uniform-cost search
+/// or A* with an admissible heuristic has not recorded the optimal cost
+/// `C*`, take a node covering `C*` with the shortest `π`. If `π` is empty,
+/// the node is a goal and its cost was recorded when it was stored. If the
+/// node were closed, its successor along `π[0]` was either stored (covering
+/// via a shorter path), pruned by a stored node covering via the same
+/// shorter `π[1..]` (dominance keeps the remaining global actions, so the
+/// paper's condition on the number of center actions is not needed), or a
+/// dead end of the heuristic, which is impossible for a state with a
+/// completion. So it is open with `f <= C*`, and the search cannot stop
+/// before recording `C*`. Termination follows from Dickson's lemma for the
+/// basic criterion, which every other one subsumes.
+///
+/// Leaves whose transitions depend on the center (center-conditioned
+/// effects, derived variables attached to them) or that have more than
+/// [`Config::max_analysis_states`] states use the basic bound.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Pruning {
@@ -67,7 +157,20 @@ pub enum Pruning {
     /// a leaf state with the cheapest way to get to where it leads.
     EffectivePrices,
     /// A leaf state may take the price of any reached leaf state that
-    /// simulates it, under a leaf simulation relation.
+    /// simulates it.
+    ///
+    /// The leaf simulation `⪯` (Definition 5 of the paper, with global
+    /// actions added) is the coarsest relation on leaf states where
+    /// `x ⪯ y` implies: if `x` satisfies the leaf goal, so does `y`; for
+    /// every global action's part `P` on the leaf, if `x` satisfies `P`'s
+    /// leaf preconditions, so does `y`, and `P(x) ⪯ P(y)`; and for every
+    /// leaf action `x -a-> x'`, either `x' ⪯ y` (the leaf stays at `y`) or
+    /// some leaf action `b` with `cost(b) <= cost(a)` and center
+    /// preconditions contained in `a`'s leads `y -b-> y'` with `x' ⪯ y'`.
+    /// By induction on a compliant leaf path from `x`, `y` has one that
+    /// complies with the same center path (each `b` is applicable wherever
+    /// `a` was, each global action's leaf preconditions hold), ends in a
+    /// goal leaf state whenever the original does, and costs no more.
     Simulation,
     /// Effective prices over simulation bounds; the strongest criterion.
     #[default]
