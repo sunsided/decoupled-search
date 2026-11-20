@@ -22,8 +22,8 @@ fn gripper() -> Task {
     SasFile::parse(&text).expect("fixture parses").to_task()
 }
 
-/// Times uniform-cost search, A* with `h^max` and GBFS with `h^FF` under
-/// the fork factoring.
+/// Times uniform-cost search, A* and anytime A* with `h^max`, and GBFS with
+/// `h^FF` under the fork factoring.
 fn bench_search(criterion: &mut Criterion) {
     let task = gripper();
     let factoring = Factoring::fork(&task);
@@ -34,6 +34,11 @@ fn bench_search(criterion: &mut Criterion) {
     });
     criterion.bench_function("astar-hmax/fork", |b| {
         b.iter(|| astar(black_box(&task), &factoring, &h_max));
+    });
+    let root = HMax::new(&factoring.with_free_leaf_actions(&task).expect("supported"));
+    let config = Config::default();
+    criterion.bench_function("anytime-astar-hmax/fork", |b| {
+        b.iter(|| config.anytime_astar(black_box(&task), &factoring, &root, &h_max));
     });
     criterion.bench_function("gbfs-hff/fork", |b| {
         b.iter(|| gbfs(black_box(&task), &factoring, &h_ff));
