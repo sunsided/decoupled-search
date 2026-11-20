@@ -1,7 +1,7 @@
 //! Random tasks with a star-shaped causal graph by construction, and the
 //! automatic star factorings on them.
 
-use decoupled_search::{Error, Factoring};
+use decoupled_search::{Error, Factoring, Strategy};
 use sas_plus::random::{RandomTaskParams, Rng, random_task};
 use sas_plus::{Effect, Fact, Operator, State, Task, VarId, Variable};
 
@@ -135,13 +135,14 @@ fn pick_index(rng: &mut Rng, len: usize) -> usize {
     usize::try_from(rng.range(0, u64::try_from(len - 1).expect("small"))).expect("small")
 }
 
-/// The automatic factoring strategies.
-pub fn strategies(task: &Task) -> [(&'static str, Factoring); 4] {
+/// The automatic factoring strategies, and the automatic choice among them.
+pub fn strategies(task: &Task) -> [(&'static str, Factoring); 5] {
     [
         ("fork", Factoring::fork(task)),
         ("inverted-fork", Factoring::inverted_fork(task)),
         ("incident-arcs", Factoring::incident_arcs(task)),
         ("max-leaves", Factoring::max_leaves(task)),
+        ("auto", Factoring::auto(task)),
     ]
 }
 
@@ -227,4 +228,62 @@ fn star_check_rejects_coupled_leaves() {
         wider.check_star(&writes_both),
         Err(Error::FactoringMismatch)
     );
+}
+
+/// `auto` picks a strategy's factoring whose score is the best of all
+/// strategies: on star tasks it always finds two mobile leaves, and it
+/// never picks a factoring with a lower leaf-action share among those with
+/// as many (capped at two) mobile leaves.
+#[test]
+fn auto_picks_the_best_scored_strategy() {
+    let mut two_mobile = 0;
+    for seed in 0..SEEDS {
+        let task = random_star_task(seed);
+        let auto = Factoring::auto(&task);
+        let score = auto.score(&task).expect("searchable");
+        let candidates: Vec<_> = Strategy::ALL
+            .iter()
+            .map(|&s| Factoring::with_strategy(&task, s))
+            .collect();
+        assert!(
+            candidates.contains(&auto) || auto.leaves().is_empty(),
+            "seed {seed}: {auto:?}"
+        );
+        for candidate in &candidates {
+            let other = candidate.score(&task).expect("searchable");
+            let tier = |mobile: usize| mobile.min(2);
+            assert!(
+                tier(other.mobile_leaves) <= tier(score.mobile_leaves),
+                "seed {seed}"
+            );
+            if tier(other.mobile_leaves) == tier(score.mobile_leaves) {
+                assert!(
+                    other.leaf_action_share() <= score.leaf_action_share(),
+                    "seed {seed}: {other:?} beats {score:?}"
+                );
+            }
+        }
+
+        two_mobile += u64::from(score.mobile_leaves >= 2);
+    }
+
+    assert!(
+        two_mobile > SEEDS / 2,
+        "only {two_mobile} with two mobile leaves"
+    );
+}
+
+/// A task where no strategy finds a mobile leaf gets the factoring without
+/// leaves.
+#[test]
+fn auto_falls_back_to_explicit_search() {
+    // Every variable is too large for a leaf.
+    let mut task = two_vars(vec![], vec![Fact::new(0, 1), Fact::new(1, 1)]);
+    for v in &mut task.variables {
+        v.domain_size = 1 << 17;
+    }
+
+    let auto = Factoring::auto(&task);
+    assert!(auto.leaves().is_empty(), "{auto:?}");
+    assert_eq!(auto.center(), &[0, 1]);
 }

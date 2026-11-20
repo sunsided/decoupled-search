@@ -42,7 +42,7 @@ use core::fmt;
 
 use sas_plus::{OpId, TaskError, VarId};
 
-pub use factoring::Factoring;
+pub use factoring::{Factoring, FactoringScore, Strategy};
 pub use heuristic::{DecoupledHeuristic, FactPrices, HFf, HMax};
 pub use plan::{Plan, PlanError};
 pub use search::{Config, Leaves, Outcome, Pruning, Statistics, astar, gbfs, search};

@@ -1,12 +1,15 @@
 //! Center/leaf partitions of a task's variables, and strategies that derive
 //! them from the causal graph.
 
+mod scoring;
 mod star;
 
 use alloc::vec;
 use alloc::vec::Vec;
 
 use sas_plus::{CausalGraph, Task, VarId};
+
+pub use scoring::{FactoringScore, Strategy};
 
 use crate::{Error, MAX_LEAF_STATES};
 
