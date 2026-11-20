@@ -51,10 +51,17 @@ fn optimal_configs() -> impl Iterator<Item = Config> {
 }
 
 /// Searches `task` under `factoring` with uniform-cost search and A* with
-/// `h^max`, under every configuration of [`optimal_configs`], checks that
+/// `h^max` (and LM-cut with the `lm-cut` feature), under every
+/// configuration of [`optimal_configs`], checks that
 /// all agree and that every plan is valid, and returns the cost; `None` if
 /// decoupled search reports the task unsolvable.
 fn checked_cost(task: &Task, factoring: &Factoring) -> Option<u64> {
+    #[cfg(feature = "lm-cut")]
+    {
+        let lm_cut = decoupled_search::LmCutHeuristic::new(task);
+        checked_cost_with(task, factoring, &[&HMax::new(task), &lm_cut])
+    }
+    #[cfg(not(feature = "lm-cut"))]
     checked_cost_with(task, factoring, &[&HMax::new(task)])
 }
 

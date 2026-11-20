@@ -37,8 +37,9 @@ Pre-release. The API will change. Implemented (see
   precise error.
 - Heuristics on decoupled states: `h^max` (admissible) and `h^FF`, both
   seeded with per-fact leaf prices (`FactPrices`, constructible for tests),
-  and with the `merge-and-shrink` feature an admissible merge-and-shrink
-  adapter (`MasHeuristic`).
+  with the `merge-and-shrink` feature an admissible merge-and-shrink
+  adapter (`MasHeuristic`), and with the `lm-cut` feature an admissible
+  LM-cut adapter (`LmCutHeuristic`, from `planning-heuristics`).
 - Reconstruction of a sequential plan for the original task, and
   `Plan::validate`.
 

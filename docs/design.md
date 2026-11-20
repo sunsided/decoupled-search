@@ -397,8 +397,35 @@ the default values of derived variables are our extension, since the
 paper has no axioms. `HFf` uses the same seeds and
 adds the largest seed price its relaxed plan starts from, our own choice
 rather than `h^FF` on `Π^L$`; it is not admissible either way. Their root estimate
-(Definition 6) is `Factoring::with_free_leaf_actions`. LM-cut remains
-open.
+(Definition 6) is `Factoring::with_free_leaf_actions`.
+
+- `LmCutHeuristic` (feature `lm-cut`) runs `planning_heuristics::LmCut`
+  on `Π^L$` at the fact level. `LmCut` evaluates explicit states only and
+  takes no seeded fact costs, so each estimate builds a task with one
+  binary variable per original fact (LM-cut works on the delete
+  relaxation, where this loses nothing): facts at price 0 and derived
+  defaults hold initially, operators keep costs and conditional effects,
+  axioms become 0-cost operators, and per factor and positive price level
+  `p` one purchase operator of cost `p` sets every fact of the factor
+  priced at most `p`. Admissible: a completion through member state `m`
+  buys each leaf state `x_L` at `P_L`, and the purchase at level `P_L`
+  covers every fact of `x_L` (each is priced at most `P_L`), so the
+  relaxed task has a plan no dearer than the completion. A unit test
+  checks it against the cheapest member state plus `h*` and against
+  `h^max` (never below, sometimes above). The price: a task and an
+  `LmCut` per evaluation (on gripper, A\* with it took 1.4x to 2x the
+  time of A\* with `h^max` on a loaded machine).
+- `planning-heuristics` would avoid the rebuild with an `LmCut`
+  evaluation from seeded fact costs (or per-call operator costs) on a
+  prebuilt relaxation; `h_max_under` exists but is crate-private.
+- Leaf reduction and LM-cut (`Config::reduced_task`): on random tasks
+  where reduction removes operators, A\* under leaf reduction with LM-cut
+  of the reduced task expands fewer states in total than with LM-cut of
+  the full task (149 against 155 over the test's 60 seeds, never more in
+  that run), at the same cost. On the Logistics example there is no gain:
+  LM-cut is already perfect (3) and the removed operators give the delete
+  relaxation no shortcut; the report's gain is in Logistics98, with
+  airplanes and airports, which we have no fixture for.
 
 ## Conditional effects and axioms
 
@@ -454,7 +481,8 @@ Invalid tasks are rejected via `Task::validate`.
   `sas_plus::random::random_task`, compare solvability and optimal cost
   between a plain Dijkstra over `sas_plus::State` and decoupled search.
   Every check runs uniform-cost search, A* with `h^max` (and the
-  merge-and-shrink adapter, exact and size-limited, with the feature),
+  merge-and-shrink adapter, exact and size-limited, and LM-cut, with their
+  features),
   and anytime A* with each of those as the fork heuristic under a blind
   root and `h^max` of the free-leaf task, in every optimal configuration
   (six criteria with and without `fold_g`, and leaf reduction under
@@ -512,7 +540,7 @@ A\* (`Config::anytime_astar`); operator removal for heuristics
 (`Config::reduced_task`).
 Open: `inverted_fork` and `x_shape` may still split the inputs of a
 derived variable over two leaves (the search rejects those factorings and
-`auto` skips them); LM-cut, an index for the dominance store, decoupled symbolic
+`auto` skips them); an index for the dominance store, decoupled symbolic
 search, decoupled partial-order reduction (strong stubborn sets), and
 multiple centers.
 
@@ -533,8 +561,10 @@ multiple centers.
   `build`, with label reduction, instead of re-running the merge loop from
   the public parts (including a copy of its private `shrink_sizes`).
 - `planning-heuristics`: `HMax` and `HFf` here run their own relaxed
-  exploration. If that crate offers `h^max`/`h^add` seeded with per-fact
-  initial costs, these could delegate to it.
+  exploration, and `LmCutHeuristic` rebuilds a task and an `LmCut` per
+  estimate. If that crate offers `h^max`/`h^add` and `LmCut` seeded with
+  per-fact initial costs (or `LmCut` with per-call operator costs), these
+  could delegate to it without the rebuild.
 
 ## References
 

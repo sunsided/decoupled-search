@@ -16,6 +16,8 @@
 //!     relaxed --> hff[HFf: relaxed plan cost]
 //! ```
 
+#[cfg(feature = "lm-cut")]
+mod lm_cut;
 #[cfg(feature = "merge-and-shrink")]
 mod mas;
 mod relaxed;
@@ -27,6 +29,8 @@ use alloc::vec::Vec;
 use sas_plus::{Fact, State, Task, VarId};
 
 use crate::{Error, Factoring};
+#[cfg(feature = "lm-cut")]
+pub use lm_cut::LmCutHeuristic;
 #[cfg(feature = "merge-and-shrink")]
 pub use mas::MasHeuristic;
 use relaxed::Relaxation;
@@ -472,5 +476,42 @@ mod tests {
             informative > 100,
             "only {informative} informative estimates"
         );
+    }
+
+    /// The LM-cut adapter is admissible on decoupled states (with derived
+    /// variables in half of the tasks) and never below `h^max`, whose
+    /// seeds it encodes.
+    #[cfg(feature = "lm-cut")]
+    #[test]
+    fn lm_cut_is_admissible_on_member_states() {
+        let (mut informative, mut stronger) = (0, 0);
+        for task in tasks() {
+            let (lm_cut, h_max) = (LmCutHeuristic::new(&task), HMax::new(&task));
+            for factoring in factorings(&task) {
+                let Ok(decoupled) = DecoupledTask::new(&task, &factoring) else {
+                    continue;
+                };
+
+                informative += check_admissible(&task, &factoring, &lm_cut);
+                let mut state = decoupled.initial();
+                for _ in 0..3 {
+                    let facts = decoupled.fact_prices(&state);
+                    let (lm, max) = (lm_cut.estimate(&facts), h_max.estimate(&facts));
+                    assert_eq!(lm.is_none(), max.is_none(), "dead ends agree");
+                    assert!(lm >= max, "{lm:?} < {max:?}");
+                    stronger += u64::from(lm > max);
+                    let Some((_, next)) = decoupled.successors(&state).pop() else {
+                        break;
+                    };
+                    state = next;
+                }
+            }
+        }
+
+        assert!(
+            informative > 100,
+            "only {informative} informative estimates"
+        );
+        assert!(stronger > 0, "LM-cut never beat h^max");
     }
 }

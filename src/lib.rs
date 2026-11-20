@@ -30,8 +30,9 @@
 //! uniform-cost, A*, anytime A* and greedy search with basic, frontier,
 //! effective-price, simulation and adaptive dominance pruning and
 //! simulation-based leaf reduction; reachability-only
-//! leaves for greedy search; `h^max` and `h^FF` on decoupled states, and a
-//! merge-and-shrink adapter behind the `merge-and-shrink` feature.
+//! leaves for greedy search; `h^max` and `h^FF` on decoupled states, a
+//! merge-and-shrink adapter behind the `merge-and-shrink` feature, and an
+//! LM-cut adapter behind the `lm-cut` feature.
 //! Conditional effects and axioms are supported where the decoupled
 //! semantics can express them and rejected with precise errors otherwise.
 //! The API will change.
@@ -53,6 +54,8 @@ use core::fmt;
 use sas_plus::{OpId, TaskError, VarId};
 
 pub use factoring::{Factoring, FactoringScore, Objective, Strategy};
+#[cfg(feature = "lm-cut")]
+pub use heuristic::LmCutHeuristic;
 #[cfg(feature = "merge-and-shrink")]
 pub use heuristic::MasHeuristic;
 pub use heuristic::{DecoupledHeuristic, FactPrices, HFf, HMax};

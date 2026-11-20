@@ -307,3 +307,67 @@ fn greedy_search_on_the_reduced_task_keeps_solvability() {
         }
     }
 }
+
+/// The technical report's LM-cut gain from leaf reduction.
+///
+/// On the Logistics example there is none: LM-cut is already perfect in
+/// the initial state (3), and the removed operators (unloading away from
+/// the goal, loading at it) offer the delete relaxation no shortcut, so
+/// both heuristics expand the same. On random tasks where reduction removes
+/// operators, LM-cut on [`Config::reduced_task`] makes A* under leaf
+/// reduction expand fewer states in total, at the same optimal cost.
+#[cfg(feature = "lm-cut")]
+#[test]
+fn lm_cut_gains_from_the_reduced_task() {
+    use decoupled_search::{DecoupledHeuristic, FactPrices, LmCutHeuristic};
+
+    use crate::validated;
+
+    let config = Config {
+        reduce_leaves: true,
+        ..Config::default()
+    };
+    let expanded = |task: &Task, factoring: &Factoring, h: &LmCutHeuristic| {
+        let outcome = config.astar(task, factoring, h).expect("supported");
+        (validated(task, outcome.plan), outcome.statistics.expanded)
+    };
+
+    let task = logistics(6);
+    let factoring = Factoring::fork(&task);
+    let reduced = config.reduced_task(&task, &factoring).expect("supported");
+    let (full_h, reduced_h) = (LmCutHeuristic::new(&task), LmCutHeuristic::new(&reduced));
+    let initial = FactPrices::from_state(&task, &task.initial_state());
+    assert_eq!(full_h.estimate(&initial), Some(3));
+    assert_eq!(reduced_h.estimate(&initial), Some(3));
+    assert_eq!(
+        expanded(&task, &factoring, &full_h),
+        expanded(&task, &factoring, &reduced_h)
+    );
+
+    let params = RandomTaskParams {
+        num_ops: 12,
+        ..RandomTaskParams::default()
+    };
+    let (mut full, mut fewer, mut better) = (0, 0, 0);
+    for seed in 0..60 {
+        let task = random_task(seed, params);
+        for factoring in factorings(&task) {
+            let reduced = config.reduced_task(&task, &factoring).expect("supported");
+            if reduced.operators.len() == task.operators.len() {
+                continue;
+            }
+
+            let (cost, a) = expanded(&task, &factoring, &LmCutHeuristic::new(&task));
+            let (same, b) = expanded(&task, &factoring, &LmCutHeuristic::new(&reduced));
+            assert_eq!(cost, same, "seed {seed}, {factoring:?}");
+            full += a;
+            fewer += b;
+            better += u64::from(b < a);
+        }
+    }
+
+    assert!(
+        fewer < full && better > 0,
+        "{fewer} vs {full} expansions, {better} better"
+    );
+}
