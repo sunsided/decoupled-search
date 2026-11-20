@@ -35,30 +35,22 @@ extern crate alloc;
 mod decoupled;
 mod factoring;
 mod heuristic;
+mod plan;
 mod search;
 
-use alloc::vec::Vec;
 use core::fmt;
 
 use sas_plus::{OpId, TaskError, VarId};
 
 pub use factoring::Factoring;
 pub use heuristic::{DecoupledHeuristic, FactPrices, HFf, HMax};
+pub use plan::{Plan, PlanError};
 pub use search::{astar, gbfs, search};
 
 /// The largest number of states a leaf may have. Leaf reachability works on
 /// dense price vectors of this size, and stored leaf-state ranks fit in
 /// `u16`.
 pub const MAX_LEAF_STATES: usize = 1 << 16;
-
-/// A sequential plan for the original task.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Plan {
-    /// Operators in execution order, applicable from the initial state.
-    pub ops: Vec<OpId>,
-    /// Sum of the operator costs.
-    pub cost: u64,
-}
 
 /// Why a task or factoring cannot be searched.
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -213,6 +213,37 @@ impl Factoring {
         Ok(())
     }
 
+    /// The leaf of every variable of `task`, `None` for center variables.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::FactoringMismatch`] if the factoring does not partition
+    /// exactly the variables of `task`.
+    pub(crate) fn leaf_of(&self, task: &Task) -> Result<Vec<Option<usize>>, Error> {
+        let mut leaf_of = vec![None; task.num_variables()];
+        let mut seen = vec![false; task.num_variables()];
+        let center = self.center.iter().map(|&v| (v, None));
+        let leaves = self
+            .leaves
+            .iter()
+            .enumerate()
+            .flat_map(|(leaf, vars)| vars.iter().map(move |&v| (v, Some(leaf))));
+        for (var, leaf) in center.chain(leaves) {
+            let slot = seen.get_mut(var).ok_or(Error::FactoringMismatch)?;
+            if core::mem::replace(slot, true) {
+                return Err(Error::FactoringMismatch);
+            }
+
+            leaf_of[var] = leaf;
+        }
+
+        if seen.contains(&false) {
+            return Err(Error::FactoringMismatch);
+        }
+
+        Ok(leaf_of)
+    }
+
     /// The center variables, sorted ascending. May be empty.
     #[must_use]
     pub fn center(&self) -> &[VarId] {

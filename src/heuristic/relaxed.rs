@@ -226,6 +226,7 @@ impl Run {
 
 #[cfg(test)]
 mod tests {
+    use alloc::borrow::Cow;
     use alloc::vec;
 
     use sas_plus::{Effect, Operator, State, Variable};
@@ -258,7 +259,11 @@ mod tests {
     fn seeded(offsets: &[usize], price: u64) -> FactPrices<'_> {
         let mut prices = vec![u64::MAX; 6];
         prices[0] = price;
-        FactPrices { offsets, prices }
+        FactPrices {
+            offsets: Cow::Borrowed(offsets),
+            leaves: Cow::Owned(vec![None; 3]),
+            prices,
+        }
     }
 
     /// `h^max` takes the costlier goal, `h^FF` both supporters; seed prices

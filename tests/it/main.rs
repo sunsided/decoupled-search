@@ -5,12 +5,13 @@ mod dijkstra;
 mod errors;
 mod fixtures;
 mod heuristic;
+mod plan;
 mod random;
 mod star;
 mod unsolvable;
 
 use decoupled_search::{Factoring, HMax, Plan, astar, search};
-use sas_plus::{Fact, OpId, Task};
+use sas_plus::Task;
 
 /// Searches `task` under `factoring` with uniform-cost search and A* with
 /// `h^max`, checks that both agree and that the plan is valid, and returns
@@ -25,39 +26,10 @@ fn checked_cost(task: &Task, factoring: &Factoring) -> Option<u64> {
     uniform
 }
 
-/// The cost of `plan` after checking it with [`plan_cost`]; `None` if there
-/// is no plan.
+/// The cost of `plan` after checking it with [`Plan::validate`]; `None` if
+/// there is no plan.
 fn validated(task: &Task, plan: Option<Plan>) -> Option<u64> {
     let plan = plan?;
-    assert_eq!(
-        plan_cost(task, &plan.ops),
-        Some(plan.cost),
-        "plan {:?} is invalid or its cost is wrong",
-        plan.ops
-    );
+    assert_eq!(plan.validate(task), Ok(()), "plan {:?}", plan.ops);
     Some(plan.cost)
-}
-
-/// An independent plan validator: applies the operators of `plan` to the
-/// initial state fact by fact and returns the plan cost if every operator is
-/// applicable and the goal holds at the end. Supports only tasks without
-/// axioms and conditional effects.
-fn plan_cost(task: &Task, plan: &[OpId]) -> Option<u64> {
-    let mut values = task.initial.0.clone();
-    let holds = |values: &[u32], facts: &[Fact]| facts.iter().all(|f| values[f.var] == f.value);
-    let mut cost = 0;
-    for &op in plan {
-        let operator = task.operators.get(op)?;
-        if !holds(&values, &operator.pre) {
-            return None;
-        }
-
-        for effect in &operator.eff {
-            values[effect.fact.var] = effect.fact.value;
-        }
-
-        cost += u64::from(operator.cost);
-    }
-
-    holds(&values, &task.goal).then_some(cost)
 }

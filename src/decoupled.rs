@@ -9,12 +9,13 @@
 mod leaf;
 mod prices;
 
+use alloc::borrow::Cow;
 use alloc::vec;
 use alloc::vec::Vec;
 
 use sas_plus::{Fact, OpId, Task, Value, VarId};
 
-use crate::heuristic::FactPrices;
+use crate::heuristic::{FactPrices, fact_offsets};
 use crate::{Error, Factoring, MAX_LEAF_STATES};
 pub(crate) use leaf::{Leaf, Price, UNREACHED};
 use leaf::{LeafAction, LeafFact, LeafPart};
@@ -84,6 +85,8 @@ pub(crate) struct DecoupledTask {
     /// Index of each task variable's first value in a [`FactPrices`]
     /// vector, plus a final entry with the number of facts.
     fact_offsets: Vec<usize>,
+    /// The leaf of each task variable, `None` for center variables.
+    leaf_of: Vec<Option<usize>>,
     /// The goal restricted to the center; `var` is the center slot.
     center_goal: Vec<Fact>,
     /// The compiled leaves, in [`Factoring::leaves`] order.
@@ -144,6 +147,13 @@ impl DecoupledTask {
                 .collect(),
             center_vars: factoring.center().to_vec(),
             fact_offsets: fact_offsets(task),
+            leaf_of: owners
+                .iter()
+                .map(|o| match o {
+                    Owner::Center(_) => None,
+                    Owner::Leaf(leaf, _) => Some(*leaf),
+                })
+                .collect(),
             center_goal: goal.center,
             leaves,
             globals,
@@ -227,7 +237,8 @@ impl DecoupledTask {
         }
 
         FactPrices {
-            offsets: &self.fact_offsets,
+            offsets: Cow::Borrowed(&self.fact_offsets),
+            leaves: Cow::Borrowed(&self.leaf_of),
             prices,
         }
     }
@@ -339,20 +350,6 @@ fn compile_leaf(task: &Task, vars: &[VarId], index: usize) -> Result<Leaf, Error
         goal: Vec::new(),
         actions: Vec::new(),
     })
-}
-
-/// The index of every variable's first value in a vector over all facts of
-/// `task`, plus a final entry with the number of facts.
-fn fact_offsets(task: &Task) -> Vec<usize> {
-    let mut offsets = Vec::with_capacity(task.num_variables() + 1);
-    let mut next = 0;
-    offsets.push(next);
-    for v in &task.variables {
-        next += widen(v.domain_size);
-        offsets.push(next);
-    }
-
-    offsets
 }
 
 /// Splits `facts` into center facts and per-leaf facts.

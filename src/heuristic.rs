@@ -18,10 +18,13 @@
 
 mod relaxed;
 
+use alloc::borrow::Cow;
+use alloc::vec;
 use alloc::vec::Vec;
 
-use sas_plus::{Fact, Task};
+use sas_plus::{Fact, State, Task, VarId};
 
+use crate::{Error, Factoring};
 use relaxed::Relaxation;
 
 /// The cheapest price at which each fact holds in some member state of a
@@ -30,14 +33,113 @@ use relaxed::Relaxation;
 /// Center facts that hold have price 0. A leaf fact has the cheapest price
 /// of a reached leaf state containing it. Facts no member state contains
 /// have no price.
+///
+/// Each variable also records its factor ([`FactPrices::leaf_of`]). A
+/// member state costs at least the sum, over the factors (the center counts
+/// as one), of the largest price of its facts in that factor: two facts of
+/// one leaf are bought together with one leaf state, facts of different
+/// leaves with different ones. Heuristics may rely on that bound.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FactPrices<'a> {
     /// Index of each variable's first value in [`FactPrices::prices`], plus
     /// a final entry with the number of facts.
-    pub(crate) offsets: &'a [usize],
+    pub(crate) offsets: Cow<'a, [usize]>,
+    /// The leaf of each variable, `None` for center variables.
+    pub(crate) leaves: Cow<'a, [Option<usize>]>,
     /// The price of every fact, by `offsets[var] + value`; `u64::MAX` for
     /// facts without a price.
     pub(crate) prices: Vec<u64>,
+}
+
+impl FactPrices<'static> {
+    /// Fact prices for `task` under `factoring`, with `price(fact)` as the
+    /// price of every fact (`None` for facts no member state contains).
+    ///
+    /// Meant for testing heuristics without running a search. The caller
+    /// is responsible for the prices being consistent with some decoupled
+    /// state, in the sense of the bound described on [`FactPrices`].
+    /// `Some(u64::MAX)` counts as no price.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::FactoringMismatch`] if `factoring` does not partition exactly
+    /// the variables of `task`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use decoupled_search::{DecoupledHeuristic, FactPrices, Factoring, HMax};
+    /// use sas_plus::{Effect, Fact, Operator, State, Task, Variable};
+    ///
+    /// let task = Task {
+    ///     variables: vec![Variable::new("x", 2)],
+    ///     operators: vec![Operator {
+    ///         name: "set".into(),
+    ///         pre: vec![Fact::new(0, 0)],
+    ///         eff: vec![Effect::new(Fact::new(0, 1))],
+    ///         cost: 3,
+    ///     }],
+    ///     initial: State(vec![0]),
+    ///     goal: vec![Fact::new(0, 1)],
+    ///     axioms: vec![],
+    /// };
+    /// let leaf = Factoring::new(&task, vec![vec![0]])?;
+    ///
+    /// // x = 0 costs 2 to reach in some member state, x = 1 is not reached.
+    /// let prices = FactPrices::new(&task, &leaf, |f| (f.value == 0).then_some(2))?;
+    /// assert_eq!(prices.get(Fact::new(0, 0)), Some(2));
+    /// assert_eq!(prices.leaf_of(0), Some(0));
+    /// assert_eq!(HMax::new(&task).estimate(&prices), Some(5));
+    /// # Ok::<(), decoupled_search::Error>(())
+    /// ```
+    pub fn new(
+        task: &Task,
+        factoring: &Factoring,
+        mut price: impl FnMut(Fact) -> Option<u64>,
+    ) -> Result<Self, Error> {
+        let leaves = factoring.leaf_of(task)?;
+        let offsets = fact_offsets(task);
+        let prices = task
+            .variables
+            .iter()
+            .enumerate()
+            .flat_map(|(var, v)| (0..v.domain_size).map(move |value| Fact::new(var, value)))
+            .map(|fact| price(fact).unwrap_or(u64::MAX))
+            .collect();
+
+        Ok(Self {
+            offsets: Cow::Owned(offsets),
+            leaves: Cow::Owned(leaves),
+            prices,
+        })
+    }
+
+    /// The fact prices of a single explicit state: its facts at price 0, all
+    /// variables in the center.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `state` does not have one value per variable of `task`.
+    #[must_use]
+    pub fn from_state(task: &Task, state: &State) -> Self {
+        assert_eq!(
+            state.0.len(),
+            task.num_variables(),
+            "the state must assign every variable of the task"
+        );
+        Self {
+            offsets: Cow::Owned(fact_offsets(task)),
+            leaves: Cow::Owned(vec![None; task.num_variables()]),
+            prices: task
+                .variables
+                .iter()
+                .zip(&state.0)
+                .flat_map(|(v, &value)| {
+                    (0..v.domain_size).map(move |d| if d == value { 0 } else { u64::MAX })
+                })
+                .collect(),
+        }
+    }
 }
 
 impl FactPrices<'_> {
@@ -52,6 +154,34 @@ impl FactPrices<'_> {
             .then(|| self.prices[index])
             .filter(|&p| p != u64::MAX)
     }
+
+    /// The leaf that variable `var` belongs to, as an index into
+    /// [`Factoring::leaves`]; `None` for center variables and for variables
+    /// out of range.
+    #[must_use]
+    pub fn leaf_of(&self, var: VarId) -> Option<usize> {
+        self.leaves.get(var).copied().flatten()
+    }
+
+    /// The number of variables these prices cover.
+    #[must_use]
+    pub fn num_variables(&self) -> usize {
+        self.leaves.len()
+    }
+}
+
+/// The index of every variable's first value in a vector over all facts of
+/// `task`, plus a final entry with the number of facts.
+pub(crate) fn fact_offsets(task: &Task) -> Vec<usize> {
+    let mut offsets = Vec::with_capacity(task.num_variables() + 1);
+    let mut next = 0;
+    offsets.push(next);
+    for v in &task.variables {
+        next += usize::try_from(v.domain_size).expect("a u32 fits in usize");
+        offsets.push(next);
+    }
+
+    offsets
 }
 
 /// A heuristic on decoupled states.
