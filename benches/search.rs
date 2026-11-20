@@ -94,9 +94,9 @@ fn bench_merge_and_shrink(criterion: &mut Criterion) {
     });
 }
 
-/// Times A* with the LM-cut adapter under the fork factoring, on the full
-/// task and on the task reduced by leaf reduction (with leaf reduction in
-/// the search).
+/// Times A* with the LM-cut adapter under the fork factoring: seeded and
+/// with price levels (rebuilt per estimate) on the full task, and seeded on
+/// the task reduced by leaf reduction (with leaf reduction in the search).
 #[cfg(feature = "lm-cut")]
 fn bench_lm_cut(criterion: &mut Criterion) {
     use decoupled_search::LmCutHeuristic;
@@ -106,6 +106,10 @@ fn bench_lm_cut(criterion: &mut Criterion) {
     let h = LmCutHeuristic::new(&task);
     criterion.bench_function("astar-lmcut/fork", |b| {
         b.iter(|| astar(black_box(&task), &factoring, &h));
+    });
+    let levels = LmCutHeuristic::with_price_levels(&task);
+    criterion.bench_function("astar-lmcut-levels/fork", |b| {
+        b.iter(|| astar(black_box(&task), &factoring, &levels));
     });
 
     let config = Config {
