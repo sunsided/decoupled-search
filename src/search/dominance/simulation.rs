@@ -176,6 +176,31 @@ pub(crate) fn redundant_transitions(
     (disabled, lost)
 }
 
+/// Per leaf action of `leaf`, whether it still has a transition that
+/// [`Leaf::disabled`] keeps and that starts in a leaf state reachable from
+/// the initial one over kept leaf actions and global parts, ignoring the
+/// center. Only meaningful for leaves whose transitions do not read the
+/// center. `parts` are the leaf parts of all global actions touching it.
+pub(crate) fn live_actions(leaf: &Leaf, parts: &[&LeafPart]) -> Vec<bool> {
+    let view = leaf.static_view();
+    let transitions = transitions(&view, parts);
+    let seen = reachable(&transitions, leaf, &leaf.disabled);
+    let count = leaf.actions.len();
+    let mut live = vec![false; count];
+    for (x, out) in transitions
+        .leaf
+        .iter()
+        .enumerate()
+        .filter(|&(x, _)| seen[x])
+    {
+        for &(a, _) in out {
+            live[a] |= !leaf.disabled.get(x * count + a).is_some_and(|&d| d);
+        }
+    }
+
+    live
+}
+
 /// The leaf states reachable from the initial leaf state over leaf actions
 /// (except `disabled` ones) and global parts, ignoring the center.
 fn reachable(transitions: &Transitions, leaf: &Leaf, disabled: &[bool]) -> Vec<bool> {

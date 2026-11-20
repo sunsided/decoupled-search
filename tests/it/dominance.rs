@@ -2,7 +2,7 @@
 //! removes the blow-up of Torralba et al.'s Logistics example, and the
 //! shared `g` budget prunes more than the plain `g` comparison.
 
-use decoupled_search::{Config, Factoring, Pruning, Statistics};
+use decoupled_search::{Config, Factoring, HMax, Pruning, Statistics};
 use sas_plus::random::{RandomTaskParams, random_task};
 use sas_plus::{Effect, Fact, Operator, State, Task, Variable};
 
@@ -215,5 +215,58 @@ fn adaptive_pruning_simulates_only_when_it_pays() {
     assert!(
         skipped > 0 && simulated > 0,
         "{skipped} skipped, {simulated} simulated"
+    );
+}
+
+/// Heuristics on [`Config::reduced_task`]: on the Logistics example only
+/// loading at the start and unloading at the goal remain of the package's
+/// twelve operators; on random tasks under every factoring, A* with
+/// `h^max` of the reduced task under leaf reduction matches Dijkstra.
+#[test]
+fn heuristics_on_the_reduced_task_stay_admissible() {
+    let task = logistics(6);
+    let factoring = Factoring::fork(&task);
+    let reduce = |pruning| Config {
+        pruning,
+        reduce_leaves: true,
+        ..Config::default()
+    };
+    let reduced = reduce(Pruning::Basic)
+        .reduced_task(&task, &factoring)
+        .expect("supported");
+    assert_eq!(reduced.operators.len(), task.operators.len() - 10);
+
+    let params = RandomTaskParams {
+        num_ops: 12,
+        ..RandomTaskParams::default()
+    };
+    let (mut runs, mut shrunk) = (0, 0);
+    for seed in 0..60 {
+        let task = random_task(seed, params);
+        let expected = optimal_cost(&task);
+        for factoring in factorings(&task) {
+            for pruning in [
+                Pruning::Basic,
+                Pruning::EffectiveSimulation,
+                Pruning::Adaptive,
+            ] {
+                let config = reduce(pruning);
+                let reduced = config.reduced_task(&task, &factoring).expect("supported");
+                shrunk += u64::from(reduced.operators.len() < task.operators.len());
+                let outcome = config
+                    .astar(&task, &factoring, &HMax::new(&reduced))
+                    .expect("supported");
+                let plan = outcome
+                    .plan
+                    .inspect(|p| assert_eq!(p.validate(&task), Ok(())));
+                assert_eq!(plan.map(|p| p.cost), expected, "seed {seed}, {factoring:?}");
+                runs += 1;
+            }
+        }
+    }
+
+    assert!(
+        shrunk > runs / 10,
+        "only {shrunk} of {runs} runs removed operators"
     );
 }

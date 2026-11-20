@@ -265,9 +265,16 @@ second condition only if `a` does not replace `b` in turn or `b` has the
 smaller index, which is what one-at-a-time removal, each step justified by
 a transition still present, removes (up to which of two mutually replacing
 transitions stays). Leaf closure skips removed transitions, so leaf states
-only reachable through them are never reached; the heuristics still see
-every operator, so the report's heuristic gain from removed actions (LM-cut
-in Logistics98) is not reproduced. Soundness (our proof, on
+only reachable through them are never reached. `Config::reduced_task`
+returns the task without the leaf actions that keep no transition from a
+leaf state the reduced leaf can still reach (under any center), for
+building heuristics: the report's gain from removed actions (LM-cut in
+Logistics98). It is sound only together with `reduce_leaves` in the
+search: every reached leaf state is then reduced-reachable, and every
+decoupled state has a cheapest completion over kept transitions from such
+states, so a heuristic admissible on the reduced task is admissible for
+the search. A random cross-check runs A\* with `h^max` of the reduced task
+against Dijkstra. Soundness (our proof, on
 `Config::reduce_leaves`): "replaces" is a preorder, the index tie-break
 makes the removal order a strict partial order, so the first removed step
 of any compliant leaf path can be replaced by a kept step or by staying,
@@ -293,7 +300,7 @@ both; the proofs and the leaf reduction are in the report only):
 | Def. 7 | `ESprices`: as Def. 4 with the simulation minimum off the goal, the plain price at the goal | the simulation minimum on anchored states too | deliberate deviation, sound by Theorem 5's argument (Lemma 1 holds from every leaf state); it can only prune more |
 | Sec. 3 | prune `s` if a seen `t` has `s ⪯ t` and `g(s) >= g(t)`; dominance also requires `d*(s) >= d*(t)` for 0-cost actions | `fold_g = false`: `g(t) <= g(n)` and every bound at most the price; `fold_g = true` (default): one budget `g(t) + Σ_L δ_L <= g(n)` | deliberate extension (subsumes the paper's rule); no `d*` condition, because every criterion maps a completion to one with the same remaining global actions, see *Optimality of A\** |
 | Sec. 3 | fork factorings, one goal leaf state, center actions do not touch leaves | star factorings with global actions on leaves, partial leaf goals; leaves with center-dependent transitions or more than `max_analysis_states` states use Def. 1 | deliberate generalisation, proofs on `Pruning` |
-| Sec. 6 (report) | superfluous transitions, then unreachable leaf states, then actions without transitions | rule 2 with the removal order above; states and actions stay but are never reached | bug in the literal rule avoided; ours strengthened to match one-at-a-time removal (before, equal-cost and equal-precondition replacements were kept whenever the replacing action had the larger index; regression test `one_directional_replacement_removes_the_dominated_transition`) |
+| Sec. 6 (report) | superfluous transitions, then unreachable leaf states, then actions without transitions | rule 2 with the removal order above; states stay but are never reached; `Config::reduced_task` drops the actions for heuristics | bug in the literal rule avoided; ours strengthened to match one-at-a-time removal (before, equal-cost and equal-precondition replacements were kept whenever the replacing action had the larger index; regression test `one_directional_replacement_removes_the_dominated_transition`) |
 | Sec. 8 | DA\* and anytime ADA\* | A\* that stops once the popped key reaches the best solution cost recorded at generation; no ADA\* | ADA\* not implemented |
 
 ## Reachability-only leaves

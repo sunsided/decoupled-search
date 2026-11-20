@@ -22,6 +22,7 @@ mod dominance;
 mod reconstruct;
 
 use alloc::collections::{BTreeMap, BinaryHeap};
+use alloc::vec;
 use alloc::vec::Vec;
 use core::cmp::Reverse;
 
@@ -288,8 +289,9 @@ pub struct Config {
     /// leaf actions without transitions; here leaf closure skips removed
     /// transitions, so those states are never reached and stored
     /// ([`Statistics::reduced_leaf_transitions`] and
-    /// [`Statistics::unreachable_leaf_states`] report the effect), but the
-    /// heuristics still see every operator.
+    /// [`Statistics::unreachable_leaf_states`] report the effect).
+    /// [`Config::reduced_task`] drops the operators left without a useful
+    /// transition, for building heuristics.
     ///
     /// *Soundness* (the report gives no proof). "Replaces" is reflexive and
     /// transitive on the transitions leaving `x`; ordering by it, and by
@@ -629,6 +631,107 @@ impl Config {
             plan,
             statistics: search.statistics,
         })
+    }
+}
+
+impl Config {
+    /// `task` without the operators that [`Config::reduce_leaves`] makes
+    /// useless under `factoring`, for building heuristics (the last step of
+    /// the leaf reduction in Torralba, Gnad, Dubbert and Hoffmann's
+    /// technical report).
+    ///
+    /// An operator is removed if it is a leaf action of an analysed leaf
+    /// (see [`Config::max_analysis_states`]) and none of its kept leaf
+    /// transitions starts in a leaf state that the reduced leaf can still
+    /// reach (over kept leaf actions and global parts, under any center).
+    /// Variables, goal and the remaining operators are unchanged, so fact
+    /// prices of the search fit heuristics built on the result.
+    ///
+    /// *Soundness.* Only use heuristics built on the result in searches
+    /// with `reduce_leaves: true`, the same `factoring` and the same
+    /// `max_analysis_states`. There, every reached leaf state is reachable
+    /// in the reduced leaf, and by the soundness argument on
+    /// [`Config::reduce_leaves`] every decoupled state has a cheapest
+    /// completion that uses only kept transitions from such states, hence
+    /// only operators of the result. A heuristic admissible on the result
+    /// is therefore admissible for the search, and fewer operators can only
+    /// raise its estimates. Without leaf reduction in the search the
+    /// estimates may exceed the true cost.
+    ///
+    /// # Errors
+    ///
+    /// As [`Config::search`], except that [`Config::leaves`] is ignored.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use decoupled_search::{Config, Factoring, HMax, Pruning};
+    /// use sas_plus::{Effect, Fact, Operator, State, Task, Variable};
+    ///
+    /// // A truck over three locations and a package (3: in the truck) that
+    /// // must go from location 0 to location 1.
+    /// let op = |pre: Vec<Fact>, eff: Fact| Operator {
+    ///     name: "op".into(),
+    ///     pre,
+    ///     eff: vec![Effect::new(eff)],
+    ///     cost: 1,
+    /// };
+    /// let mut operators = Vec::new();
+    /// for x in 0..3 {
+    ///     for y in (0..3).filter(|&y| y != x) {
+    ///         operators.push(op(vec![Fact::new(0, x)], Fact::new(0, y)));
+    ///     }
+    ///     operators.push(op(vec![Fact::new(0, x), Fact::new(1, x)], Fact::new(1, 3)));
+    ///     operators.push(op(vec![Fact::new(0, x), Fact::new(1, 3)], Fact::new(1, x)));
+    /// }
+    /// let task = Task {
+    ///     variables: vec![Variable::new("truck", 3), Variable::new("pkg", 4)],
+    ///     operators,
+    ///     initial: State(vec![0, 0]),
+    ///     goal: vec![Fact::new(1, 1)],
+    ///     axioms: vec![],
+    /// };
+    ///
+    /// let config = Config { reduce_leaves: true, ..Config::default() };
+    /// let factoring = Factoring::fork(&task);
+    /// let reduced = config.reduced_task(&task, &factoring)?;
+    /// // Only loading at 0 and unloading at 1 remain of the package's six.
+    /// assert_eq!(reduced.operators.len(), task.operators.len() - 4);
+    ///
+    /// let outcome = config.astar(&task, &factoring, &HMax::new(&reduced))?;
+    /// assert_eq!(outcome.plan.map(|p| p.cost), Some(3));
+    /// # Ok::<(), decoupled_search::Error>(())
+    /// ```
+    pub fn reduced_task(&self, task: &Task, factoring: &Factoring) -> Result<Task, Error> {
+        let mut decoupled = DecoupledTask::new(task, factoring)?;
+        let config = Config {
+            reduce_leaves: true,
+            ..*self
+        };
+        let dominance = Dominance::new(&decoupled, &config, false);
+        reduce_leaves(&mut decoupled, &dominance, &mut Statistics::default());
+
+        let mut removed = vec![false; task.operators.len()];
+        for (index, leaf) in decoupled.leaves.iter().enumerate() {
+            if dominance.simulators(index).is_none() {
+                continue;
+            }
+
+            let parts: Vec<_> = decoupled
+                .globals
+                .iter()
+                .filter_map(|g| g.parts[index].as_ref())
+                .collect();
+            let live = simulation::live_actions(leaf, &parts);
+            for (action, live) in leaf.actions.iter().zip(live) {
+                removed[action.op] |= !live;
+            }
+        }
+
+        let mut reduced = task.clone();
+        let mut keep = removed.iter().map(|&r| !r);
+        reduced.operators.retain(|_| keep.next().unwrap_or(true));
+        Ok(reduced)
     }
 }
 
