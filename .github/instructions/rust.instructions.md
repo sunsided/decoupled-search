@@ -36,7 +36,7 @@ applyTo: "**/*.rs"
 - The fuzz targets `search` (factoring and search entry points against explicit search) and
   `plan` (`Plan::validate` against `Task::validate_plan`) cover the same ground with
   arbitrary inputs. A new entry point that builds factorings or searches joins `search`.
-- Public API changes go with a matching update to the README status list, the crate docs in
+- Public API changes go with a matching update to the README scope list, the crate docs in
   `lib.rs` and `docs/design.md`. Name every public API change in the PR.
 - Mermaid diagrams in doc comments must match the code they describe. Update them when the
   structure changes.

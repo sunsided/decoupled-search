@@ -8,12 +8,43 @@
 [![License](https://img.shields.io/crates/l/decoupled-search)](https://github.com/sunsided/decoupled-search#license)
 [![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg)](https://github.com/rust-secure-code/safety-dance/)
 
-Decoupled search for factored SAS+ planning: center and leaf factoring, leaf reachability and leaf-state dominance.
+Decoupled (star-topology) search for factored planning tasks in
+[sas-plus](https://github.com/sunsided/sas-plus)'s SAS+ representation, after Gnad and Hoffmann (ICAPS 2015,
+AIJ 2018). A factoring splits the variables into a center and several leaves; the search then follows paths of
+global actions only and keeps, per leaf, the cheapest price of every leaf state reachable along the current path.
+On tasks with loosely coupled components (logistics-style packages around a shared vehicle, independent machines
+around a common resource), that removes the interleavings of leaf moves which blow up an explicit state space, and
+the search still returns an ordinary sequential plan for the original task.
 
-## Status
+The crate covers the factoring strategies, cost-optimal (uniform-cost, A*, anytime A*) and satisficing (GBFS)
+search, the dominance pruning of Torralba, Gnad, Dubbert and Hoffmann (2016) and decoupled heuristics, with plan reconstruction and
+an independent plan validator. It is `no_std` with `alloc`, with and without the optional features.
 
-Pre-release. The API will change. Implemented (see
-[docs/design.md](https://github.com/sunsided/decoupled-search/blob/main/docs/design.md)):
+## Who this is for
+
+- Planning researchers working on star-topology decoupling, factoring selection or dominance pruning who want a
+  readable implementation, cross-checked against explicit search, to build on or compare against.
+- Planner authors whose tasks fall apart into a center and many weakly interacting leaves (transport, multi-robot
+  delivery, manufacturing cells), where explicit search spends most of its effort on interleavings of leaf moves.
+- Embedded and robotics teams that plan onboard: the crate builds for `no_std` targets.
+- Tasks without a useful star factoring gain nothing from decoupling; `Factoring::auto` then falls back to explicit
+  search, and for explicit-state search on its own
+  [heuristic-search](https://github.com/sunsided/heuristic-search) is the better fit.
+- For the heuristics themselves on ordinary states, use
+  [planning-heuristics](https://github.com/sunsided/planning-heuristics); for symbolic search over the same tasks,
+  [symbolic-search](https://github.com/sunsided/symbolic-search).
+
+## Installation
+
+```toml
+[dependencies]
+decoupled-search = "0.1"
+```
+
+## Scope
+
+More detail, including how each rule maps to the papers, is in
+[docs/design.md](https://github.com/sunsided/decoupled-search/blob/main/docs/design.md).
 
 - Factorings: fork, inverted fork, X-shape, and the incident-arcs and
   independent-set (maximum leaves) strict-star strategies of Gnad, Poser
@@ -94,8 +125,7 @@ println!("{:?}", outcome.statistics);
 - `merge-and-shrink`: `MasHeuristic`, an admissible merge-and-shrink heuristic on decoupled
   states, from [merge-and-shrink](https://crates.io/crates/merge-and-shrink).
 - `lm-cut`: `LmCutHeuristic`, an admissible LM-cut heuristic on decoupled states, from
-  [planning-heuristics](https://github.com/sunsided/planning-heuristics) (not on crates.io
-  yet).
+  [planning-heuristics](https://github.com/sunsided/planning-heuristics).
 
 The crate is `no_std` with `alloc`, with and without the features.
 
@@ -114,5 +144,4 @@ without any additional terms or conditions.
 
 ## Contributing
 
-See [CONTRIBUTING.md](https://github.com/sunsided/decoupled-search/blob/main/CONTRIBUTING.md),
-including how to build against local checkouts of the sibling crates.
+See [CONTRIBUTING.md](https://github.com/sunsided/decoupled-search/blob/main/CONTRIBUTING.md).

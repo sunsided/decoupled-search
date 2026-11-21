@@ -7,8 +7,7 @@ plans for the original task. It has strict conventions; the formal semantics liv
 `docs/design.md`. Path-specific rules live in `.github/instructions/*.instructions.md`.
 
 - Run checks through the Taskfile: `task ci` mirrors CI. `task lint`, `task test` and
-  `task doc` are the common entry points. Local builds need the `planning-heuristics`
-  repository checked out next to this one (optional path dependency behind `lm-cut`).
+  `task doc` are the common entry points.
 - Every item gets a doc comment, private items included. No `mod.rs` files (use `foo.rs`
   plus `foo/`). No `// ----` separator comments (split the file into modules instead).
 - `clippy::pedantic` must stay clean. Suppress only with

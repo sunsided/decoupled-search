@@ -15,8 +15,7 @@ applyTo: "**/Cargo.toml,release-plz.toml,.github/workflows/release-plz.yml,**/CH
 - New dependencies must pass `cargo deny check`: allowed licenses, no advisories, no git or
   unknown-registry sources. Runtime dependencies are `sas-plus` and the optional `merge-and-shrink` and
   `planning-heuristics`; adding one needs a reason in the PR.
-- Released siblings are plain crates.io dependencies (no `path`). `planning-heuristics` keeps
-  `path` plus `version` until it has a release; then drop the `path`.
+- Sibling crates are plain crates.io dependencies (no `path`).
 - `rust-version` is a signal, not a contract. Raising it is allowed when a dependency or a
   feature benefits. It needs a minor release and a changelog note, never a patch release.
 - release-plz runs in git-only mode: it tags and creates GitHub Releases. `publish-crates-io.yml`

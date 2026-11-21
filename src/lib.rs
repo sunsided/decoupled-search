@@ -22,9 +22,9 @@
 //!     search --> plan[Plan: sequential, validated]
 //! ```
 //!
-//! ## Status
+//! ## Scope
 //!
-//! Pre-release, see `docs/design.md`: fork, inverted-fork, X-shape, incident-arcs
+//! Fork, inverted-fork, X-shape, incident-arcs
 //! and independent-set star factorings (Gnad, Poser and Hoffmann, IJCAI
 //! 2017) and explicit ones, scored and chosen by [`Factoring::auto`];
 //! uniform-cost, A*, anytime A* and greedy search with basic, frontier,
@@ -35,7 +35,6 @@
 //! LM-cut adapter behind the `lm-cut` feature.
 //! Conditional effects and axioms are supported where the decoupled
 //! semantics can express them and rejected with precise errors otherwise.
-//! The API will change.
 //!
 //! Repository: <https://github.com/sunsided/decoupled-search>
 

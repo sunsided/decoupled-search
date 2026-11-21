@@ -1,6 +1,6 @@
 [package]
 name = "decoupled-search"
-description = "Decoupled search for factored SAS+ planning: center and leaf factoring, leaf reachability and leaf-state dominance"
+description = "Decoupled (star-topology) search for factored SAS+ planning: star factorings, cost-optimal and greedy search, dominance pruning and decoupled heuristics"
 version = "0.0.0"
 edition = "2024"
 rust-version = "1.86"
@@ -8,8 +8,8 @@ authors = ["Markus Mayer <widemeadows@gmail.com>"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/sunsided/decoupled-search"
 readme = "README.md"
-keywords = ["planning", "sas", "decoupled-search", "factored", "search"]
-categories = ["algorithms", "science", "no-std"]
+keywords = ["planning", "decoupled-search", "star-topology", "factored-planning", "astar"]
+categories = ["algorithms", "artificial-intelligence", "science", "no-std"]
 # Repository tooling stays out of the published crate.
 exclude = [
     ".github/",

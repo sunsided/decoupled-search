@@ -6,8 +6,6 @@ task's variables into one *center* and several *leaves*, searches over center
 paths only, and keeps, per leaf, the set of leaf states reachable along the
 current center path together with their cheapest cost (the *price*).
 
-Status: milestones 1 to 5 (see [Milestones](#milestones)).
-
 ## Terminology
 
 | Term | Meaning |
@@ -38,7 +36,7 @@ the center), which are star factorings.
 
 Strategies:
 
-1. **Fork (sink components)**, milestone 1, `Factoring::fork`. Every sink
+1. **Fork (sink components)**, `Factoring::fork`. Every sink
    strongly connected component of the causal graph (no arcs leaving it) whose
    leaf state space has at most `2^16` states becomes a leaf; everything else
    is the center. This is the refined fork strategy of Gnad, Poser and
@@ -47,7 +45,7 @@ Strategies:
    component, so all of them are leaf actions. On a task whose causal graph is
    one component, this yields no leaves and the search degenerates to plain
    uniform-cost search over the center.
-2. **Explicit**, milestone 1, `Factoring::new(task, leaves)`. The caller names
+2. **Explicit**, `Factoring::new(task, leaves)`. The caller names
    the leaves; the center is the rest. Used by tests to exercise arbitrary
    partitions.
 3. **Inverted fork**, `Factoring::inverted_fork`. The fork strategy on the
@@ -533,33 +531,12 @@ Invalid tasks are rejected via `Task::validate`.
 - The seeded cross-checks loop seeds deterministically. Tests build with
   `opt-level = 1`.
 
-## Milestones
+## Not yet implemented
 
-1. **Done.** Fork and explicit factorings, leaf closure, global
-   successors, uniform-cost search with simple dominance pruning, plan
-   reconstruction, cross-checks.
-2. **Done.** Sparse stored prices; frontier, effective-price and
-   simulation dominance with a shared `g` budget; search statistics.
-3. **Done.** Inverted-fork and greedy star factorings with a star check;
-   A* with a heuristic trait; `h^max` and `h^FF` seeded with fact prices;
-   factoring scores and `Factoring::auto`.
-4. **Done.** GBFS; reachability-only leaves; the `merge-and-shrink`
-   heuristic adapter.
-5. **Done.** Conditional effects and axioms where decoupling allows;
-   `Plan::validate`; a public `FactPrices` constructor.
-
-Done since: simulation-based leaf reduction and the adaptive default;
-the factoring strategies, the leaf reduction and the dominance criteria
-checked against the papers (tables above), with the incident-arcs and
-independent-set strategies of Gnad, Poser and Hoffmann (2017); X-shape
-factorings; sample-search selection (`Factoring::auto_by_sample`); anytime
-A\* (`Config::anytime_astar`); operator removal for heuristics
-(`Config::reduced_task`).
-Open: `inverted_fork` and `x_shape` may still split the inputs of a
-derived variable over two leaves (the search rejects those factorings and
-`auto` skips them); an index for the dominance store, decoupled symbolic
-search, decoupled partial-order reduction (strong stubborn sets), and
-multiple centers.
+`inverted_fork` and `x_shape` may still split the inputs of a derived variable over two
+leaves (the search rejects those factorings and `auto` skips them). Also open: an index for
+the dominance store, decoupled symbolic search, decoupled partial-order reduction (strong
+stubborn sets), and multiple centers.
 
 ## Cross-crate needs
 
@@ -568,8 +545,8 @@ multiple centers.
   serve this crate and `merge-and-shrink`.
 - `sas-plus`: `State` does not implement `Ord`, so `no_std` maps keyed by
   states need a `Vec<Value>` key. An `Ord` derive would help.
-- `heuristic-search`: once it exists, the test-only Dijkstra here should be
-  replaced by its implementation, and decoupled search could reuse its open
+- `heuristic-search`: the test-only Dijkstra here could be replaced by its
+  implementation, and decoupled search could reuse its open
   lists.
 - `search-core`: a shared `Plan { ops, cost }` type (with validation) would
   avoid one more local definition.
@@ -580,7 +557,7 @@ multiple centers.
 - `planning-heuristics`: `HMax` and `HFf` here run their own relaxed
   exploration; `h_max_seeded` sums seeds, while `HMax` takes the maximum
   per factor, so they are not interchangeable. `LmCutHeuristic::new` uses
-  `LmCut::value_seeded` (needs `planning-heuristics` at 9f2fbc4 or later).
+  `LmCut::value_seeded`.
 
 ## References
 

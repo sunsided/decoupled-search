@@ -20,14 +20,9 @@ needs before it can be merged.
    - nightly Rust plus [cargo-fuzz](https://github.com/rust-fuzz/cargo-fuzz) for fuzzing;
    - the `thumbv7em-none-eabihf` target (`rustup target add thumbv7em-none-eabihf`) for the
      `no_std` build.
-4. Check out [planning-heuristics](https://github.com/sunsided/planning-heuristics) next to
-   this repository (`../planning-heuristics`). The optional `lm-cut` feature depends on it by
-   path, and it has no crates.io release yet, so Cargo needs the checkout for every build
-   (even without the feature). CI checks it out the same way. Released sibling crates
-   (`sas-plus`, `merge-and-shrink`) are plain crates.io dependencies; inside the planning hub,
-   the untracked `../.cargo/config.toml` (`[patch.crates-io]`) points them at their working
-   trees, so local development builds against sibling checkouts. That patch rewrites
-   `Cargo.lock` on every build, which is why no lock file is tracked.
+4. The sibling crates (`sas-plus`, `merge-and-shrink`, `planning-heuristics`) are plain
+   crates.io dependencies, so a plain clone builds. This library tracks no lock file; CI
+   resolves fresh from crates.io.
 5. Install the git hooks with [prek](https://prek.j178.dev/) (`prek install`), or with
    `pre-commit install`. Fast checks run on commit; clippy and tests run on push.
 
