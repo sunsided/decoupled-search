@@ -1,0 +1,21 @@
+# https://github.com/crate-ci/typos/blob/master/docs/reference.md
+[files]
+extend-exclude = [
+  "*.lock",
+  "fuzz/corpus/**",
+  "fuzz/artifacts/**",
+  "**/proptest-regressions/**",
+  "LICENSES/**",
+  "LICENSE-*",
+]
+
+[default.extend-words]
+# Project-specific words typos flags wrongly, e.g. `ser = "ser"`. Keep each entry justified.
+# Maximum independent set (the independent-set star factoring).
+mis = "mis"
+# "Thm." for theorem, in the paper cross-references of docs/design.md.
+thm = "thm"
+# Gripper operator names: "drive-ba" drives from room b to room a.
+ba = "ba"
+
+[default.extend-identifiers]
