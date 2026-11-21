@@ -11,10 +11,13 @@ readme = "README.md"
 keywords = ["planning", "sas", "decoupled-search", "factored", "search"]
 categories = ["algorithms", "science", "no-std"]
 
+# Released sibling crates come from crates.io; local development patches them to the sibling
+# working trees through the planning hub's .cargo/config.toml (see CONTRIBUTING.md).
 [dependencies]
 sas-plus = { version = "0.2.1", default-features = false }
-merge-and-shrink = { version = "0.3.0", path = "../merge-and-shrink", optional = true }
-# Unreleased: LmCut (see docs/design.md).
+merge-and-shrink = { version = "0.3.0", optional = true }
+# Unreleased (0.0.0 placeholder on crates.io): LmCut (see docs/design.md). Cargo needs the
+# sibling checkout at ../planning-heuristics until it has a release.
 planning-heuristics = { version = "0.0.0", path = "../planning-heuristics", optional = true }
 
 [features]
