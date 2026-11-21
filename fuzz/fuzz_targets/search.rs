@@ -110,6 +110,7 @@ fn check(task: &Task, factoring: &Factoring, config: Config, expected: Option<u6
     let Ok(outcome) = config.search(task, factoring) else {
         return;
     };
+
     assert_eq!(
         validated(task, outcome.plan),
         expected,
