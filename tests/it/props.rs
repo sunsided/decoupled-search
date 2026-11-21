@@ -62,16 +62,17 @@ fn task_and_state() -> impl Strategy<Value = (Task, State)> {
 /// The admissible heuristics under test: `h^max`, and LM-cut in both
 /// evaluation modes with the `lm-cut` feature.
 fn admissible(task: &Task) -> Vec<Box<dyn DecoupledHeuristic>> {
-    let mut all: Vec<Box<dyn DecoupledHeuristic>> = vec![Box::new(HMax::new(task))];
+    let h_max: Box<dyn DecoupledHeuristic> = Box::new(HMax::new(task));
     #[cfg(feature = "lm-cut")]
     {
-        all.push(Box::new(decoupled_search::LmCutHeuristic::new(task)));
-        all.push(Box::new(
-            decoupled_search::LmCutHeuristic::with_price_levels(task),
-        ));
+        vec![
+            h_max,
+            Box::new(decoupled_search::LmCutHeuristic::new(task)),
+            Box::new(decoupled_search::LmCutHeuristic::with_price_levels(task)),
+        ]
     }
-
-    all
+    #[cfg(not(feature = "lm-cut"))]
+    vec![h_max]
 }
 
 proptest! {
