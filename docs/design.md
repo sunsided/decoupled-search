@@ -517,8 +517,21 @@ Invalid tasks are rejected via `Task::validate`.
 - **Termination on unsolvable tasks** and **fixtures** (gripper, optimal
   costs 7 and 5).
 - **Axiom evaluation** against `Task::evaluate_axioms` on random states.
-- Seeds are looped deterministically; no proptest dependency. Tests build
-  with `opt-level = 1`.
+- **Property tests** (`tests/it/props.rs`, proptest): every factoring
+  strategy against Dijkstra on fresh random tasks (conditional effects,
+  axioms, zero costs; rejection allowed) and on random star tasks (an
+  eighth of the cases, they are larger), and `h^max` and both LM-cut
+  modes against `h*` from arbitrary explicit states, with `None` only on
+  dead ends. `task test:prop` raises the case count.
+- **Fuzz targets** (`fuzz/`, cargo-fuzz on nightly): `search` builds an
+  arbitrary leaf partition (unknown variables included) on a small random
+  task and checks that the factoring and search entry points reject or
+  agree with explicit search, uniform-cost, A\* with `h^max` and LM-cut,
+  and greedy search alike; `plan` checks `Plan::validate` against
+  `Task::validate_plan` on arbitrary operator sequences and costs. CI
+  builds them; `task fuzz:smoke` runs them.
+- The seeded cross-checks loop seeds deterministically. Tests build with
+  `opt-level = 1`.
 
 ## Milestones
 
