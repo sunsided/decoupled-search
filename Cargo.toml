@@ -28,6 +28,7 @@ lm-cut = ["dep:planning-heuristics"]
 
 [dev-dependencies]
 criterion = "0.8.2"
+proptest = "1.11.0"
 sas-plus = { version = "0.2.1", features = ["fdr", "random"] }
 
 [[bench]]

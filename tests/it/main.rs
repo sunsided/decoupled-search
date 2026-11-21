@@ -9,6 +9,7 @@ mod heuristic;
 #[cfg(feature = "merge-and-shrink")]
 mod mas;
 mod plan;
+mod props;
 mod random;
 mod star;
 mod unsolvable;
