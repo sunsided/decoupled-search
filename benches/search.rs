@@ -164,6 +164,11 @@ fn bench_symbolic(criterion: &mut Criterion) {
     };
     let symbolic = Config {
         symbolic_leaves: true,
+        symbolic_min_states: 0,
+        ..explicit
+    };
+    let mixed = Config {
+        symbolic_leaves: true,
         ..explicit
     };
 
@@ -172,6 +177,9 @@ fn bench_symbolic(criterion: &mut Criterion) {
     // The explicit counterpart is `uniform-basic/fork` in `bench_pruning`.
     criterion.bench_function("uniform-basic-symbolic/fork", |b| {
         b.iter(|| symbolic.search(black_box(&task), &factoring));
+    });
+    criterion.bench_function("uniform-basic-mixed/fork", |b| {
+        b.iter(|| mixed.search(black_box(&task), &factoring));
     });
 
     for n in [8, 12, 16, 24] {
@@ -188,6 +196,71 @@ fn bench_symbolic(criterion: &mut Criterion) {
     }
 }
 
+/// `n` center switches that each turn on at cost 1 and one leaf that steps
+/// on its own: `2^n` center states, `n + 1` pricing-and-`g` groups.
+#[cfg(feature = "symbolic-leaves")]
+fn switches(n: usize) -> Task {
+    use sas_plus::{Effect, Fact, Operator, State, Variable};
+
+    let mut operators: Vec<Operator> = (0..n)
+        .map(|i| Operator {
+            name: format!("on{i}"),
+            pre: vec![Fact::new(i, 0)],
+            eff: vec![Effect::new(Fact::new(i, 1))],
+            cost: 1,
+        })
+        .collect();
+    operators.push(Operator {
+        name: "step".into(),
+        pre: vec![Fact::new(n, 0)],
+        eff: vec![Effect::new(Fact::new(n, 1))],
+        cost: 1,
+    });
+    Task {
+        variables: (0..=n).map(|i| Variable::new(format!("v{i}"), 2)).collect(),
+        operators,
+        initial: State(vec![0; n + 1]),
+        goal: (0..=n).map(|i| Fact::new(i, 1)).collect(),
+        axioms: vec![],
+    }
+}
+
+/// Times uniform-cost search with an explicit and with a symbolic center
+/// on [`switches`], and the symbolic center on the gripper fork, where few
+/// center states share a pricing function.
+#[cfg(feature = "symbolic-leaves")]
+fn bench_symbolic_center(criterion: &mut Criterion) {
+    let explicit = Config {
+        pruning: Pruning::Basic,
+        fold_g: false,
+        ..Config::default()
+    };
+    let grouped = Config {
+        symbolic_center: true,
+        ..explicit
+    };
+
+    for n in [6, 10, 14] {
+        let task = switches(n);
+        let factoring = Factoring::new(&task, vec![vec![n]]).expect("valid");
+        criterion.bench_function(&format!("uniform-basic-nofold/switches-{n}"), |b| {
+            b.iter(|| explicit.search(black_box(&task), &factoring));
+        });
+        criterion.bench_function(&format!("uniform-basic-center/switches-{n}"), |b| {
+            b.iter(|| grouped.search(black_box(&task), &factoring));
+        });
+    }
+
+    let task = gripper();
+    let factoring = Factoring::fork(&task);
+    criterion.bench_function("uniform-basic-nofold/fork", |b| {
+        b.iter(|| explicit.search(black_box(&task), &factoring));
+    });
+    criterion.bench_function("uniform-basic-center/fork", |b| {
+        b.iter(|| grouped.search(black_box(&task), &factoring));
+    });
+}
+
 /// Runs every benchmark in this file with criterion's command-line flags.
 fn main() {
     let mut criterion = Criterion::default().configure_from_args();
@@ -200,5 +273,7 @@ fn main() {
     bench_lm_cut(&mut criterion);
     #[cfg(feature = "symbolic-leaves")]
     bench_symbolic(&mut criterion);
+    #[cfg(feature = "symbolic-leaves")]
+    bench_symbolic_center(&mut criterion);
     criterion.final_summary();
 }

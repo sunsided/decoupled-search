@@ -79,8 +79,11 @@ More detail, including how each rule maps to the papers, is in
   pruning and leaf reduction that its proof does not cover are listed in
   the `stubborn_sets` documentation.
 - Optional symbolic leaves (`Config::symbolic_leaves`, feature `symbolic-leaves`): leaf
-  pricing functions as BDDs (Gnad, Torralba and Hoffmann, SoCS 2017), for leaves too large
-  to enumerate. Same state space and results as explicit leaves, under basic dominance.
+  pricing functions as BDDs (Gnad, Torralba and Hoffmann, SoCS 2017) for leaves too large
+  to enumerate, with small leaves kept enumerated next to them. Same state space and results
+  as explicit leaves, under basic dominance. Optionally a symbolic center
+  (`Config::symbolic_center`): one search node per set of center states that share their
+  leaf pricing and cost.
 - Reachability-only leaves (no prices) for GBFS.
 - Conditional effects on a leaf conditioned on the center and that leaf,
   on the center conditioned on the center; derived variables that depend on
@@ -139,7 +142,8 @@ println!("{:?}", outcome.statistics);
 - `lm-cut`: `LmCutHeuristic`, an admissible LM-cut heuristic on decoupled states, from
   [planning-heuristics](https://crates.io/crates/planning-heuristics).
 
-- `symbolic-leaves`: `Config::symbolic_leaves`, leaf pricing functions as BDDs, from
+- `symbolic-leaves`: `Config::symbolic_leaves`, leaf pricing functions as BDDs, and
+  `Config::symbolic_center`, search nodes that hold sets of center states, both on
   [symbolic-search](https://crates.io/crates/symbolic-search). Needs `std`.
 
 The crate is `no_std` with `alloc`, with and without the features, except `symbolic-leaves`.
