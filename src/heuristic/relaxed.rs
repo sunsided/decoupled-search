@@ -7,7 +7,7 @@ use core::cmp::Reverse;
 
 use sas_plus::{Effect, Fact, OpId, Task};
 
-use super::FactPrices;
+use super::{FactPrices, fact_offsets};
 
 /// The cost of a fact that the relaxation does not reach.
 const UNREACHED: u64 = u64::MAX;
@@ -71,12 +71,10 @@ impl Relaxation {
     ///
     /// Panics if `task` fails [`Task::validate`].
     pub(crate) fn new(task: &Task) -> Self {
-        let mut offsets = Vec::with_capacity(task.num_variables());
-        let mut facts = Vec::new();
-        for (var, variable) in task.variables.iter().enumerate() {
-            offsets.push(facts.len());
-            facts.extend((0..variable.domain_size).map(|value| Fact::new(var, value)));
-        }
+        let offsets = fact_offsets(task);
+        let facts: Vec<Fact> = (task.variables.iter().enumerate())
+            .flat_map(|(var, v)| (0..v.domain_size).map(move |value| Fact::new(var, value)))
+            .collect();
 
         let index = |f: &Fact| offsets[f.var] + usize::try_from(f.value).expect("u32 fits usize");
         let relaxed = |pre: &mut dyn Iterator<Item = &Fact>, eff: Vec<usize>, cost, source| {
