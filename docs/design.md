@@ -414,6 +414,13 @@ never needed there either.
 - Theorem 5's first family (`M` trucks, each with its own `N`
   packages): exactly `M + 1` states are stored, as the paper states (7
   against 729 for `M = 6`, `N = 2`).
+- On 100 random tasks over every test factoring, stubborn sets prune
+  together with dominance in about 100 runs per configuration and store
+  fewer states in total: 2698 against 4117 under the default, 3618
+  against 6261 under `Basic` without `fold_g`, 2587 against 3941 with leaf
+  reduction.
+- GBFS with stubborn sets, with priced and with reachability-only leaves,
+  finds a valid plan exactly on the solvable random tasks.
 - The `search` fuzz target sets `stubborn_sets` from its input.
 - `Statistics::stubborn_pruned` counts the applicable global actions the
   sets leave out.

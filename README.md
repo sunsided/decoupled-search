@@ -71,7 +71,10 @@ More detail, including how each rule maps to the papers, is in
   Search statistics come with every `Outcome`.
 - Optional partial-order reduction (`Config::stubborn_sets`): the
   decoupled strong stubborn sets of Gnad, Hoffmann and Wehrle (JAIR 2019)
-  for general star factorings, which keep optimality and completeness.
+  for general star factorings. The paper proves they keep optimality and
+  completeness under duplicate detection; the combinations with dominance
+  pruning and leaf reduction that its proof does not cover are listed in
+  the `stubborn_sets` documentation.
 - Reachability-only leaves (no prices) for GBFS.
 - Conditional effects on a leaf conditioned on the center and that leaf,
   on the center conditioned on the center; derived variables that depend on

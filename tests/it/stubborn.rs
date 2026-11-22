@@ -2,10 +2,12 @@
 //! Hoffmann and Wehrle (JAIR 2019) and prune what the paper says they prune.
 //! The randomized cross-checks run with them through [`crate::optimal_configs`].
 
-use decoupled_search::{Config, Factoring, HMax, Pruning, Statistics};
+use decoupled_search::{Config, Factoring, HFf, HMax, Leaves, Pruning, Statistics};
+use sas_plus::random::{RandomTaskParams, random_task};
 use sas_plus::{Effect, Fact, Operator, State, Task, Variable};
 
 use crate::dijkstra::optimal_cost;
+use crate::random::factorings;
 
 /// An operator with unconditional effects.
 fn op(name: String, pre: Vec<Fact>, eff: Vec<Fact>, cost: u32) -> Operator {
@@ -265,5 +267,104 @@ fn one_truck_at_a_time_under_every_criterion() {
             pruned.statistics.stored <= plain.statistics.stored,
             "{pruning:?}"
         );
+    }
+}
+
+/// The configurations the random measurements below compare: the default
+/// (adaptive dominance with the shared `g` budget), basic dominance with
+/// the plain `g` comparison, and the default with leaf reduction.
+fn measured_configs() -> [Config; 3] {
+    [
+        Config::default(),
+        Config {
+            pruning: Pruning::Basic,
+            fold_g: false,
+            ..Config::default()
+        },
+        Config {
+            reduce_leaves: true,
+            ..Config::default()
+        },
+    ]
+}
+
+/// On random tasks the cross-checks are not vacuous: stubborn sets prune
+/// while dominance pruning also fires, under each measured configuration,
+/// and they never store more states in total.
+#[test]
+fn random_tasks_prune_alongside_dominance() {
+    let params = RandomTaskParams {
+        num_vars: 6,
+        max_domain: 3,
+        num_ops: 16,
+        max_cost: 4,
+        ..RandomTaskParams::default()
+    };
+    for config in measured_configs() {
+        let (mut both, mut stored, mut stored_plain) = (0, 0, 0);
+        for seed in 0..100 {
+            let task = random_task(seed, params);
+            let expected = optimal_cost(&task);
+            for factoring in factorings(&task) {
+                let plain = config.search(&task, &factoring).expect("supported");
+                let pruned = Config {
+                    stubborn_sets: true,
+                    ..config
+                }
+                .search(&task, &factoring)
+                .expect("supported");
+                assert_eq!(
+                    pruned.plan.map(|p| p.cost),
+                    expected,
+                    "seed {seed}, {config:?}"
+                );
+                let s = pruned.statistics;
+                if s.stubborn_pruned > 0 && s.dominated > 0 {
+                    both += 1;
+                }
+                stored += s.stored;
+                stored_plain += plain.statistics.stored;
+            }
+        }
+
+        assert!(
+            both > 0,
+            "{config:?}: stubborn sets never pruned alongside dominance"
+        );
+        assert!(
+            stored <= stored_plain,
+            "{config:?}: {stored} > {stored_plain}"
+        );
+    }
+}
+
+/// GBFS with stubborn sets finds a valid plan exactly when one exists,
+/// with priced and with reachability-only leaves.
+#[test]
+fn greedy_search_with_stubborn_sets_keeps_solvability() {
+    let params = RandomTaskParams {
+        num_vars: 5,
+        num_ops: 12,
+        ..RandomTaskParams::default()
+    };
+    for seed in 0..200 {
+        let task = random_task(seed, params);
+        let solvable = optimal_cost(&task).is_some();
+        for factoring in factorings(&task) {
+            for leaves in [Leaves::Priced, Leaves::Reachability] {
+                let config = Config {
+                    leaves,
+                    stubborn_sets: true,
+                    ..Config::default()
+                };
+                let outcome = config
+                    .gbfs(&task, &factoring, &HFf::new(&task))
+                    .expect("supported");
+                if let Some(plan) = &outcome.plan {
+                    assert_eq!(plan.validate(&task), Ok(()), "seed {seed}, {leaves:?}");
+                }
+                assert_eq!(outcome.plan.is_some(), solvable, "seed {seed}, {leaves:?}");
+            }
+        }
     }
 }
