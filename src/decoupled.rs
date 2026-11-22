@@ -72,7 +72,7 @@ pub(crate) struct DecoupledTask {
     initial_center: Vec<Value>,
     /// The task variable of each center slot: the factoring's center minus
     /// the derived variables attached to a leaf.
-    center_vars: Vec<VarId>,
+    pub(crate) center_vars: Vec<VarId>,
     /// The derived center variables and their rules.
     center_derived: Scope,
     /// The task's axioms, for derived center and leaf variables.
@@ -143,7 +143,7 @@ impl DecoupledTask {
 
     /// The successor of `state` under global action `index`, or `None` if it
     /// is not applicable.
-    fn successor(&self, index: usize, state: &DecoupledState) -> Option<DecoupledState> {
+    pub(crate) fn successor(&self, index: usize, state: &DecoupledState) -> Option<DecoupledState> {
         let action = &self.globals[index];
         if !holds(&action.center_pre, &state.center) {
             return None;

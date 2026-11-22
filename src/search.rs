@@ -20,6 +20,7 @@
 
 mod dominance;
 mod reconstruct;
+mod stubborn;
 
 use alloc::collections::{BTreeMap, BinaryHeap};
 use alloc::vec;
@@ -31,6 +32,7 @@ use sas_plus::{Task, Value};
 use crate::decoupled::{DecoupledState, DecoupledTask, Price};
 use crate::{DecoupledHeuristic, Error, Factoring, Plan};
 use dominance::{Bounds, Dominance, simulation};
+use stubborn::StubbornSets;
 
 /// How the open list is ordered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -319,6 +321,37 @@ pub struct Config {
     /// and mirrored paths in the simulation bound are converted the same
     /// way.
     pub reduce_leaves: bool,
+    /// Whether to apply, in every expanded state, only the global actions
+    /// of a decoupled strong stubborn set (Gnad, Hoffmann and Wehrle, JAIR
+    /// 2019, Definitions 4 to 8, general star topologies, with the paper's
+    /// approximations). Default: `false`.
+    ///
+    /// The set is the closure of: in a non-goal state, the achievers of an
+    /// open part of the goal (a leaf fact no reached leaf state has, else a
+    /// leaf's goal part no single reached leaf state has, else a center
+    /// fact); in a goal state, the actions that could still lower some
+    /// leaf's goal price (none: the state is not expanded); for an
+    /// unreached action in the set, the achievers of an open part of its
+    /// precondition; for a reached one, every action that interferes with
+    /// it and has a consistent precondition, and every action leaving a
+    /// reached leaf state towards its leaf preconditions. The paper proves
+    /// that this keeps a strongly optimal decoupled plan, so uniform-cost
+    /// search, A* and anytime A* stay optimal and every search stays
+    /// complete. [`Statistics::stubborn_pruned`] counts what it removes.
+    ///
+    /// Where the paper's guarantee stops:
+    ///
+    /// - Tasks with conditional effects or axioms are searched with full
+    ///   expansion; the construction is not defined for them.
+    /// - The paper covers duplicate detection, not dominance pruning. For
+    ///   [`Pruning::Basic`], [`Pruning::Frontier`] and
+    ///   [`Pruning::EffectivePrices`] with [`Config::fold_g`] off, a
+    ///   dominating state can follow the pruned one's center path at no
+    ///   higher cost, which is the property the proof needs (an argument of
+    ///   this crate, not a proof). The other criteria, `fold_g`, and
+    ///   [`Config::reduce_leaves`] rest on the randomized cross-checks
+    ///   against Dijkstra only.
+    pub stubborn_sets: bool,
 }
 
 impl Default for Config {
@@ -329,6 +362,7 @@ impl Default for Config {
             leaves: Leaves::default(),
             max_analysis_states: 256,
             reduce_leaves: false,
+            stubborn_sets: false,
         }
     }
 }
@@ -359,6 +393,9 @@ pub struct Statistics {
     /// Leaf states that [`Config::reduce_leaves`] made unreachable from the
     /// initial leaf states (under every center).
     pub unreachable_leaf_states: u64,
+    /// Applicable global actions that [`Config::stubborn_sets`] left out,
+    /// summed over the expanded states.
+    pub stubborn_pruned: u64,
 }
 
 /// The result of a search run: the plan, if any, and counters.
@@ -418,6 +455,8 @@ struct Search<'t> {
     limit: Option<u64>,
     /// What a sample search measures.
     probe: Probe,
+    /// The stubborn set construction; `None` for full expansion.
+    stubborn: Option<StubbornSets>,
 }
 
 /// Finds a cheapest plan for `task` by uniform-cost decoupled search over
@@ -728,6 +767,10 @@ impl Config {
         } else {
             0
         };
+        let stubborn = self
+            .stubborn_sets
+            .then(|| StubbornSets::new(task, &decoupled))
+            .flatten();
         let mut search = Search {
             task: &decoupled,
             heuristic,
@@ -742,6 +785,7 @@ impl Config {
             statistics,
             limit,
             probe: Probe::default(),
+            stubborn,
         };
         search.run();
         search.statistics.simulated_leaves = search.dominance.simulated_leaves();
@@ -999,8 +1043,20 @@ impl Search<'_> {
             }
 
             self.statistics.expanded += 1;
-            let g = self.nodes[id].g;
-            for (action, state) in self.task.successors(&self.nodes[id].state) {
+            let node = &self.nodes[id];
+            let g = node.g;
+            let successors = match self.stubborn.as_mut() {
+                None => self.task.successors(&node.state),
+                Some(stubborn) => {
+                    let (allowed, pruned) = stubborn.allowed(self.task, &node.state);
+                    self.statistics.stubborn_pruned += pruned;
+                    (0..allowed.len())
+                        .filter(|&i| allowed[i])
+                        .filter_map(|i| self.task.successor(i, &node.state).map(|s| (i, s)))
+                        .collect()
+                }
+            };
+            for (action, state) in successors {
                 let g = g.saturating_add(self.task.globals[action].cost);
                 self.insert(state, g, Some((id, action)));
             }

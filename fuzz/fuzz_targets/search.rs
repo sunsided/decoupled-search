@@ -58,6 +58,8 @@ struct Input {
     fold_g: bool,
     /// [`Config::reduce_leaves`].
     reduce_leaves: bool,
+    /// [`Config::stubborn_sets`].
+    stubborn_sets: bool,
 }
 
 impl Input {
@@ -90,6 +92,7 @@ impl Input {
             pruning: PRUNINGS[usize::from(self.pruning) % PRUNINGS.len()],
             fold_g: self.fold_g,
             reduce_leaves: self.reduce_leaves,
+            stubborn_sets: self.stubborn_sets,
             ..Config::default()
         }
     }

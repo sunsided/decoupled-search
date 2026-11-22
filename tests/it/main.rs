@@ -12,6 +12,7 @@ mod plan;
 mod props;
 mod random;
 mod star;
+mod stubborn;
 mod unsolvable;
 
 use decoupled_search::{Config, DecoupledHeuristic, FactPrices, Factoring, HMax, Plan, Pruning};
@@ -29,7 +30,7 @@ const PRUNINGS: [Pruning; 6] = [
 
 /// Every configuration of the cost-optimal searches: each dominance
 /// criterion with and without the shared `g` budget, and leaf reduction
-/// under three of them.
+/// under three of them, each with and without stubborn sets.
 fn optimal_configs() -> impl Iterator<Item = Config> {
     let plain = PRUNINGS.into_iter().flat_map(|pruning| {
         [true, false].map(|fold_g| Config {
@@ -48,7 +49,12 @@ fn optimal_configs() -> impl Iterator<Item = Config> {
         reduce_leaves: true,
         ..Config::default()
     });
-    plain.chain(reduced)
+    plain.chain(reduced).flat_map(|config| {
+        [false, true].map(|stubborn_sets| Config {
+            stubborn_sets,
+            ..config
+        })
+    })
 }
 
 /// Searches `task` under `factoring` with uniform-cost search and A* with

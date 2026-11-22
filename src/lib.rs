@@ -29,7 +29,8 @@
 //! 2017) and explicit ones, scored and chosen by [`Factoring::auto`];
 //! uniform-cost, A*, anytime A* and greedy search with basic, frontier,
 //! effective-price, simulation and adaptive dominance pruning and
-//! simulation-based leaf reduction; reachability-only
+//! simulation-based leaf reduction; decoupled strong stubborn sets
+//! (Gnad, Hoffmann and Wehrle, JAIR 2019); reachability-only
 //! leaves for greedy search; `h^max` and `h^FF` on decoupled states, a
 //! merge-and-shrink adapter behind the `merge-and-shrink` feature, and an
 //! LM-cut adapter behind the `lm-cut` feature.

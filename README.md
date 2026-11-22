@@ -69,6 +69,9 @@ More detail, including how each rule maps to the papers, is in
   removal order that keeps it sound), and `Config::reduced_task` without
   the operators it makes useless, for heuristics.
   Search statistics come with every `Outcome`.
+- Optional partial-order reduction (`Config::stubborn_sets`): the
+  decoupled strong stubborn sets of Gnad, Hoffmann and Wehrle (JAIR 2019)
+  for general star factorings, which keep optimality and completeness.
 - Reachability-only leaves (no prices) for GBFS.
 - Conditional effects on a leaf conditioned on the center and that leaf,
   on the center conditioned on the center; derived variables that depend on

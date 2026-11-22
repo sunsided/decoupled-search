@@ -405,17 +405,18 @@ never needed there either.
 ### Checks
 
 - Every random-task cross-check (Dijkstra cost, `Plan::validate`) runs
-  again with `stubborn_sets`, under every `Pruning`, both `fold_g`, and
-  with and without `reduce_leaves`, on tasks that include 0-cost
-  operators.
+  again with `stubborn_sets`, under every `Pruning` with both `fold_g` and
+  under leaf reduction, on tasks that include 0-cost operators,
+  conditional effects and axioms (the last two with full expansion).
 - The paper's examples as oracles: the NoEmpty transport task, and
   Example 2 (company car), whose optimal cost is 2, not the 100 of the
   initial goal state.
 - Theorem 5's first family (`M` trucks, each with its own `N`
-  packages): pruning is non-zero and about `M + 1` states are stored,
-  against exponentially many in `M` without it.
+  packages): exactly `M + 1` states are stored, as the paper states (7
+  against 729 for `M = 6`, `N = 2`).
 - The `search` fuzz target sets `stubborn_sets` from its input.
-- `Statistics::stubborn_pruned` counts the successors the sets remove.
+- `Statistics::stubborn_pruned` counts the applicable global actions the
+  sets leave out.
 
 ## Reachability-only leaves
 
@@ -637,8 +638,8 @@ Invalid tasks are rejected via `Task::validate`.
 
 `inverted_fork` and `x_shape` may still split the inputs of a derived variable over two
 leaves (the search rejects those factorings and `auto` skips them). Also open: an index for
-the dominance store, decoupled symbolic search, decoupled partial-order reduction (strong
-stubborn sets), and multiple centers.
+the dominance store, decoupled symbolic search, the fork and inverted-fork refinements of
+decoupled strong stubborn sets, and multiple centers.
 
 ## Cross-crate needs
 
