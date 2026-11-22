@@ -5,6 +5,7 @@ mod dijkstra;
 mod dominance;
 mod errors;
 mod fixtures;
+mod generalized;
 mod heuristic;
 #[cfg(feature = "merge-and-shrink")]
 mod mas;

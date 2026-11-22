@@ -28,8 +28,9 @@ use alloc::vec::Vec;
 
 use core::cmp::Reverse;
 
-use sas_plus::{CausalGraph, Task, VarId};
+use sas_plus::{Task, VarId};
 
+use super::graph::FactorGraph;
 use super::{Factoring, leaf_states};
 use crate::decoupled::mobile_leaves;
 
@@ -83,9 +84,14 @@ impl Factoring {
     /// ```
     #[must_use]
     pub fn incident_arcs(task: &Task) -> Self {
-        let graph = CausalGraph::new(task);
-        let neighbours = neighbours(task, &graph);
-        let mut in_center = vec![false; task.num_variables()];
+        let graph = FactorGraph::new(task);
+        let neighbours = neighbours(&graph, task.num_variables());
+        // Derived variables have no arcs and stay in the center.
+        let mut in_center: Vec<bool> = task
+            .variables
+            .iter()
+            .map(sas_plus::Variable::is_derived)
+            .collect();
         let mut best: Option<Candidate> = None;
         for v in incident_arc_order(&graph, task.num_variables()) {
             in_center[v] = true;
@@ -171,14 +177,14 @@ impl Candidate {
 /// Per leaf, whether it has a leaf action; all `false` if the factoring
 /// would be rejected. `leaves` must contain no derived variables, or leaves
 /// of only derived variables would shift the indices.
-fn mobility(task: &Task, leaves: &[Vec<VarId>]) -> Vec<bool> {
+pub(super) fn mobility(task: &Task, leaves: &[Vec<VarId>]) -> Vec<bool> {
     let factoring = Factoring::from_leaves(task, leaves.to_vec());
     mobile_leaves(task, &factoring).unwrap_or_else(|_| vec![false; factoring.leaves.len()])
 }
 
 /// The variables by decreasing number of incident causal-graph arcs
 /// (incoming plus outgoing), the smaller variable first on ties.
-fn incident_arc_order(graph: &CausalGraph, n: usize) -> Vec<VarId> {
+fn incident_arc_order(graph: &FactorGraph, n: usize) -> Vec<VarId> {
     let mut order: Vec<VarId> = (0..n).collect();
     order.sort_by_key(|&v| {
         (
@@ -189,70 +195,26 @@ fn incident_arc_order(graph: &CausalGraph, n: usize) -> Vec<VarId> {
     order
 }
 
-/// Per variable, its distinct causal-graph neighbours in either direction,
-/// plus the other state variables that feed a derived variable it feeds,
-/// sorted.
+/// Per variable of the `n` in `graph`, its distinct neighbours in either
+/// direction, sorted.
 ///
-/// The extra edges keep the inputs of every derived variable in one factor:
-/// the search rejects a derived variable that depends on two leaves
-/// ([`crate::Error::AxiomAcrossLeaves`]). The paper has no axioms; without
-/// them this is the causal graph's undirected neighbourhood.
-fn neighbours(task: &Task, graph: &CausalGraph) -> Vec<Vec<VarId>> {
-    let mut out: Vec<Vec<VarId>> = (0..task.num_variables())
+/// [`FactorGraph`] joins the inputs of every derived variable, so this
+/// keeps them in one factor: the search rejects a derived variable that
+/// depends on two leaves ([`crate::Error::AxiomAcrossLeaves`]). The paper
+/// has no axioms; without them this is the causal graph's undirected
+/// neighbourhood.
+fn neighbours(graph: &FactorGraph, n: usize) -> Vec<Vec<VarId>> {
+    (0..n)
         .map(|v| {
-            graph
+            let mut list: Vec<VarId> = graph
                 .successors(v)
                 .iter()
                 .chain(graph.predecessors(v))
                 .copied()
-                .collect()
-        })
-        .collect();
-    for inputs in derived_inputs(task) {
-        for &u in &inputs {
-            out[u].extend(inputs.iter().copied().filter(|&w| w != u));
-        }
-    }
-
-    for list in &mut out {
-        list.sort_unstable();
-        list.dedup();
-    }
-
-    out
-}
-
-/// Per derived variable, the state variables it depends on, directly or
-/// through other derived variables.
-fn derived_inputs(task: &Task) -> Vec<Vec<VarId>> {
-    let n = task.num_variables();
-    let mut direct = vec![Vec::new(); n];
-    for axiom in &task.axioms {
-        direct[axiom.head.var].extend(axiom.conditions.iter().map(|f| f.var));
-    }
-
-    (0..n)
-        .filter(|&v| task.variables[v].is_derived())
-        .map(|derived| {
-            let mut seen = vec![false; n];
-            seen[derived] = true;
-            let mut stack = vec![derived];
-            let mut inputs = Vec::new();
-            while let Some(v) = stack.pop() {
-                for &u in &direct[v] {
-                    if core::mem::replace(&mut seen[u], true) {
-                        continue;
-                    }
-
-                    if task.variables[u].is_derived() {
-                        stack.push(u);
-                    } else {
-                        inputs.push(u);
-                    }
-                }
-            }
-
-            inputs
+                .collect();
+            list.sort_unstable();
+            list.dedup();
+            list
         })
         .collect()
 }

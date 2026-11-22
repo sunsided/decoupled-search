@@ -30,9 +30,15 @@ not affect the center affects only one leaf and has preconditions only on
 it and the center. Our leaf actions are exactly those actions (their
 *leaf-only* actions); we additionally accept actions that affect the center
 or several leaves, and actions that read another leaf, as global actions,
-so arbitrary partitions are searchable. The strategies below produce
-*strict-star* factorings (every causal-graph arc between factors touches
-the center), which are star factorings.
+so arbitrary partitions are searchable. These are the *generalized
+factorings* of Gnad, Torralba and Fišer (ICAPS 2022, Definitions 3 and 4:
+any partition, a possibly empty center, and every action that is not
+leaf-only is global); their Theorem 1 maps one to a star factoring of the
+task with one extra unary center variable that every global action sets,
+with the same decoupled state space, so the search stays sound, complete
+and optimal. Strategies 1 to 6 below produce *strict-star* factorings
+(every causal-graph arc between factors touches the center), which are
+star factorings; strategy 7 produces generalized ones.
 
 Strategies:
 
@@ -70,9 +76,44 @@ Strategies:
    test checks it against brute force. Growing tracks mobility
    incrementally: without axioms, moving `v` into leaf `L` can only change
    `L`'s mobility, through operators touching `v`.
+7. **Generalized**, `Factoring::generalized` (Gnad, Torralba and Fišer,
+   ICAPS 2022). The candidate leaves are the paper's potential leaves, the
+   effect variable sets of the operators. The paper picks leaves with an
+   integer program maximizing the number of mobile leaves (objective L);
+   here a greedy pass approximates it: candidates smallest first, then by
+   how few other candidates they overlap, then by how many operators share
+   the effect set, and a candidate stays only if it is disjoint from the
+   leaves so far and it and every earlier leaf stay mobile. Leaves may read
+   and write each other (those operators are global) and the center may
+   be empty. On the paper's Example 1 (agents that charge each other's
+   batteries) it finds one leaf per agent with its battery around an empty
+   center, where no star strategy has two mobile leaves. On 96 of 100
+   random tasks it has two or more mobile leaves without being a star, and
+   decoupled search over those matches Dijkstra. `Factoring::auto` now
+   returns it on 171 of 200 unstructured random tasks (where star
+   strategies rarely find two mobile leaves) and on 2 of 200 random star
+   tasks. On the random tasks where no star strategy finds two mobile
+   leaves, it still finds two or more in most cases, and search over them
+   matches Dijkstra (issue #3's acceptance).
+
+   *Several centers.* A factoring with centers `C_1, ..., C_k`, each with
+   its own leaves, searches like the generalized factoring with center
+   `C_1 ∪ ... ∪ C_k`: global actions are exactly the actions that are not
+   leaf-only, wherever they act, and a leaf-only action may read any center
+   variable, so tying a leaf to one center would only make more actions
+   global. Several centers are therefore covered by generalized factorings
+   (with the union as center, or no center at all). A *nested* hierarchy,
+   where a group of a sub-center and its leaves is itself decoupled inside
+   a leaf of an outer star, is not: its pricing would range over the inner
+   decoupled states, which no published formulation describes. Symbolic
+   leaves cover the practical case of such a group, one large leaf.
+
+   The other
+   objectives (mobility, balanced mobility, fact flexibility) and the
+   minimum leaf flexibility constraint are not implemented.
 
 `Factoring::check_star` reports the first causal-graph arc between two
-leaves (`Error::NotStar`). Every strategy except `Factoring::new` passes
+leaves (`Error::NotStar`). Every strategy except `Factoring::new` and `Factoring::generalized` passes
 it; search does not require it. Derived variables are never leaf
 variables: the strategies move them to the center (see
 [Conditional effects and axioms](#conditional-effects-and-axioms)).
@@ -106,7 +147,7 @@ budget instead of a clock (see the table).
 | Sec. 4.1 | all maximum independent sets found within 10 s | up to 16 within a deterministic work budget | deliberate deviation: `no_std`, reproducible |
 | Sec. 4 | abstain below two mobile leaves | `incident_arcs` and `max_leaves` return their best candidate anyway; `auto` abstains (no leaves) | deliberate: the strategy functions return a `Factoring`, not an `Option`; `auto` used to accept a single mobile leaf |
 | Sec. 5 | pick a factoring by 1 s sample searches (LM-cut A\* / GBFS with `h^FF`); a sample that solves the task wins; else expansions (optimal) or heuristic improvement `h(I) / min h` (satisficing), higher better | `auto`: static score (leaf-action share, mobile leaves, largest leaf); opt-in `auto_by_sample(task, objective, expansions)`: samples of A\* with `h^max` or GBFS with `h^FF` under an expansion budget; finished samples win (least work first); optimal: expansions per work unit; satisficing: heuristic improvement, then less work | deliberate deviation: an expansion budget instead of a clock (`no_std`), so the expansion rate is measured in deterministic work units (per generated state, one plus its leaf states), and `h^max` instead of LM-cut; the chosen factoring is returned, not the sample's plan |
-| — | no axioms | the inputs of a derived variable count as adjacent in both strategies, so none is split over two leaves (`Error::AxiomAcrossLeaves`) | extension; regression test `strategies_keep_axiom_inputs_in_one_factor` |
+| — | no axioms | every strategy and `check_star` work on the causal graph with derived variables contracted into their inputs (`factoring/graph.rs`): the inputs of a derived variable are adjacent, so none is split over two leaves (`Error::AxiomAcrossLeaves`), and an operator reading a derived variable reads its inputs, as the search attaches it | extension; regression tests `strategies_keep_axiom_inputs_in_one_factor`, `derived_variables_count_as_their_inputs`, `unread_derived_variables_leave_fork_leaves_alone` |
 | Sec. 2 | causal graph arcs `pre ∪ eff -> eff` | `sas_plus::CausalGraph`, plus effect conditions and axioms | matches (the extra arcs only keep conditional effects and axioms inside one factor) |
 
 ## Decoupled state and pricing
@@ -425,21 +466,25 @@ never needed there either.
 - `Statistics::stubborn_pruned` counts the applicable global actions the
   sets leave out.
 
-## Symbolic leaves
+## Symbolic leaves and center
 
 Gnad, Torralba and Hoffmann (SoCS 2017) keep each leaf's pricing
 function as binary decision diagrams instead of an explicit price per leaf
 state. The decoupled state space does not change: the same center paths,
 the same prices, the same plans. Only the representation does, so leaves
 far larger than `MAX_LEAF_STATES` become usable when their reachable sets
-have small diagrams. The paper does not expand sets of decoupled states
-at once (a symbolic center); that part of issue #1 stays open.
+have small diagrams. Small leaves stay enumerated next to symbolic ones
+(mixed leaves, the paper's best configuration). The paper does not expand
+sets of decoupled states at once; the symbolic center below is this
+crate's formulation. The code is `src/symbolic.rs` with
+`src/symbolic/{bdd_leaf,explicit,grouped}.rs`.
 
 ### Representation
 
 - *Encoding.* Each leaf variable gets `ceil(log2 |D(v)|)` bits; current
-  and next bits are interleaved per leaf, in leaf variable order. Each
-  leaf has its own BDD manager, so leaves never share variables.
+  and next bits are interleaved per leaf, in leaf variable order. All
+  symbolic leaves (and a symbolic center) share one oxidd manager, each on
+  its own variables.
 - *Transition relations.* One relation per leaf action projected onto its
   leaf, grouped by (cost, center precondition), and one per global part on
   the leaf (cost 0 in the leaf; the action's cost is in `g`).
@@ -475,116 +520,81 @@ state `y` at price `p` whose global part leads to `x`: continue from `y` in
 node `k - 1`. The key falls strictly in each step, so the walk ends at the
 initial leaf state in the initial node. Leaf actions are then interleaved
 with the center path as in the explicit path.
+
+### Mixed leaves
+
+`Config::symbolic_min_states` (default 1024, about where diagrams start to
+pay off on the benchmark below) keeps every leaf with fewer states
+enumerated: dense prices over the explicit search's compiled leaf, with
+its leaf closure, transfers and goal bound (`symbolic/explicit.rs`). Both kinds
+answer the same per-leaf questions (closure, transfer, least price in a
+set, dominance slack), so the search does not tell them apart. A leaf
+above `MAX_LEAF_STATES` that would be enumerated is rejected with
+`LeafTooLarge`.
+
+### Symbolic center
+
+`Config::symbolic_center` (this crate's formulation) makes a search node
+`(C, P, g)` a BDD `C` of center states that all have pricing `P` and cost
+`g`; its members are the decoupled states `(c, P)` for `c` in `C`.
+
+1. *Expansion.* For global action `a`: the members whose center satisfies
+   `a`'s center preconditions, carried by `a`'s center relation (image),
+   with `P` carried across `a`'s leaf parts. That carried pricing is the
+   same for every member, since without conditional effects leaf parts do
+   not read the center.
+2. *Classes.* The closure after `a` depends on the center only through
+   which leaf actions' center preconditions hold. The image is split by
+   each distinct such precondition (inside or outside), and each class is
+   closed once. Every member of a class gets exactly the pricing an
+   explicit successor with that center gets.
+3. *Merging.* A new node joins a stored node that is not yet expanded, has
+   the same `g` and the same pricing (canonical BDDs compare by value),
+   and was created after the new node's parent. Its members are still
+   reached at cost `g` with that pricing, and parent links always point to
+   older nodes.
+4. *Dominance.* A stored node with `g` no higher (ignored by GBFS) and
+   pointwise no higher prices removes its center states from the new node,
+   which is `Pruning::Basic` applied per member; the node is pruned when
+   none remain. Stored nodes are scanned linearly.
+5. *Goals and heuristics.* A node holds a solution if a member satisfies
+   the center goal; its cost is `g` plus the leaf goal prices, as for
+   every member. Heuristics see a center fact as reached at price 0 when
+   some member has it. Fact prices are monotone, so this is a lower bound
+   on every member's estimate, and admissible heuristics stay admissible.
+6. *Reconstruction.* Pick a goal center state of the final node, then walk
+   back: the node's sources record `(parent, action, contributed states)`,
+   the preimage of the current center state under that action's relation,
+   intersected with the parent's members, gives a predecessor. The
+   concrete center path then feeds the leaf reconstruction above.
+
+Every member is an ordinary decoupled state reached at its recorded cost,
+and every successor of a member is a member of some generated node, so
+uniform-cost search and A\* stay optimal and GBFS complete. Anytime A\*
+and `fold_g` are rejected.
 
 ### Scope
 
-- `Config::symbolic_leaves` (feature `symbolic-leaves`) switches every
-  leaf to the symbolic representation, in `src/symbolic.rs`. Mixed explicit
-  and symbolic leaves (the paper's best configuration) are not implemented.
-- Supported: uniform-cost search, A\*, anytime A\* and GBFS, priced and
-  reachability-only leaves, `Pruning::Basic` with and without `fold_g`
-  (the per-leaf slack is the largest price difference over intersecting
-  layers), and every heuristic, since heuristics read only `FactPrices`;
-  the paper's symbolic LM-cut is not needed because the seeded LM-cut here
-  already works on per-fact prices.
+- Feature `symbolic-leaves`. `Config::symbolic_leaves` switches leaves
+  with at least `symbolic_min_states` states to diagrams;
+  `Config::symbolic_center` works with symbolic or enumerated leaves.
+- Supported with symbolic leaves: uniform-cost search, A\*, anytime A\*
+  and GBFS, priced and reachability-only leaves, `Pruning::Basic` with and
+  without `fold_g` (the per-leaf slack is the largest price difference
+  over intersecting layers), and every heuristic, since heuristics read
+  only `FactPrices`; the paper's symbolic LM-cut is not needed because
+  the seeded LM-cut here already works on per-fact prices.
 - Rejected with `Error::SymbolicUnsupported`: the other dominance criteria
   (they analyse explicit leaf states), `reduce_leaves`, `stubborn_sets`,
-  conditional effects and axioms.
+  conditional effects and axioms; with a symbolic center also anytime A\*
+  and `fold_g`.
 - `Factoring::new` accepts leaves of any size; the explicit path rejects a
   leaf above `MAX_LEAF_STATES` when it compiles the task.
-- All leaves share one oxidd manager on disjoint variables. A run that
-  fills the node table restarts with four times the nodes, up to `2^24`,
-  then fails with `Error::OutOfNodes`.
-- The best-first loop is a copy of the explicit one restricted to basic
-  dominance, so that both expand the same states in the same order.
-
-### Checks
-
-- Every random-task cross-check (Dijkstra cost, `Plan::validate`) runs
-  again with `stubborn_sets`, under every `Pruning` with both `fold_g` and
-  under leaf reduction, on tasks that include 0-cost operators,
-  conditional effects and axioms (the last two with full expansion).
-- The paper's examples as oracles: the NoEmpty transport task, and
-  Example 2 (company car), whose optimal cost is 2, not the 100 of the
-  initial goal state.
-- Theorem 5's first family (`M` trucks, each with its own `N`
-  packages): exactly `M + 1` states are stored, as the paper states (7
-  against 729 for `M = 6`, `N = 2`).
-- On 100 random tasks over every test factoring, stubborn sets prune
-  together with dominance in about 100 runs per configuration and store
-  fewer states in total: 2698 against 4117 under the default, 3618
-  against 6261 under `Basic` without `fold_g`, 2587 against 3941 with leaf
-  reduction.
-- GBFS with stubborn sets, with priced and with reachability-only leaves,
-  finds a valid plan exactly on the solvable random tasks.
-- The `search` fuzz target sets `stubborn_sets` from its input.
-- `Statistics::stubborn_pruned` counts the applicable global actions the
-  sets leave out.
-
-## Symbolic leaves
-
-Gnad, Torralba and Hoffmann (SoCS 2017) keep each leaf's pricing
-function as binary decision diagrams instead of an explicit price per leaf
-state. The decoupled state space does not change: the same center paths,
-the same prices, the same plans. Only the representation does, so leaves
-far larger than `MAX_LEAF_STATES` become usable when their reachable sets
-have small diagrams. The paper does not expand sets of decoupled states
-at once (a symbolic center); that part of issue #1 stays open.
-
-### Representation
-
-- *Encoding.* Each leaf variable gets `ceil(log2 |D(v)|)` bits; current
-  and next bits are interleaved per leaf, in leaf variable order. Each
-  leaf has its own BDD manager, so leaves never share variables.
-- *Transition relations.* One relation per leaf action projected onto its
-  leaf, grouped by (cost, center precondition), and one per global part on
-  the leaf (cost 0 in the leaf; the action's cost is in `g`).
-- *Pricing function.* Per leaf, a list of layers `(price, depth, set)`,
-  ascending in `(price, depth)`, pairwise disjoint, every leaf state at its
-  cheapest price. `depth` counts the 0-cost image steps inside a price, so
-  reconstruction can always step back to a strictly smaller key. The
-  reached set is the union of the layers.
-
-### Operations
-
-The explicit path's operations, each with its symbolic form:
-
-| Explicit | Symbolic |
-| --- | --- |
-| closure (`View::close`) | symbolic Dijkstra per leaf from the current layers, over the relations whose center precondition holds; 0-cost relations iterate to a fixpoint within a price, each round a new `depth` |
-| transfer across a global action | per layer: intersect with the part's precondition, image through its relation, then subtract all cheaper layers to restore disjointness |
-| applicability (reached precondition) | some layer intersects the precondition BDD |
-| goal price | least price whose layer intersects the leaf goal BDD |
-| `FactPrices` (all heuristics) | per leaf fact, least price whose layer intersects the fact's BDD |
-| dominance, `Pruning::Basic` | same center, `g` no higher, and every layer `(p, S)` of the new state has `S` inside the union of the stored state's layers of price at most `p` |
-| `min_goal_price` (anytime A\*) | symbolic Dijkstra on all leaf relations, center ignored |
-| plan reconstruction | see below |
-
-*Reconstruction (this crate's design; the paper does not describe it).*
-Walk the center path backwards, one leaf at a time, with a single leaf
-state `x` at key `(p, d)` in node `k`, starting from a cheapest goal leaf
-state `pick`ed from the final node. Either some leaf relation of cost `c`
-active under node `k`'s center has a predecessor of `x` in node `k`'s
-layer at `p - c` (at depth `d - 1` if `c = 0`): step back to it and record
-the action; or `x` came in with the transfer, and node `k - 1` has a leaf
-state `y` at price `p` whose global part leads to `x`: continue from `y` in
-node `k - 1`. The key falls strictly in each step, so the walk ends at the
-initial leaf state in the initial node. Leaf actions are then interleaved
-with the center path as in the explicit path.
-
-### Scope of a first version
-
-- `Config::symbolic_leaves: bool` switches every leaf to the symbolic
-  representation. Mixed explicit and symbolic leaves (the paper's best
-  configuration) can follow.
-- Supported: uniform-cost search, A\*, anytime A\* and GBFS, priced and
-  reachability-only leaves, `Pruning::Basic` without `fold_g`, every
-  heuristic that reads only `FactPrices` (`HMax`, `HFf`, `LmCutHeuristic`;
-  the paper's symbolic LM-cut is not needed because the seeded LM-cut here
-  already works on per-fact prices).
-- Rejected with an error: the other dominance criteria and `fold_g` (they
-  analyse explicit leaf states), `reduce_leaves`, `stubborn_sets`,
-  `MasHeuristic`, conditional effects and axioms.
+- A run that fills the node table restarts with four times the nodes, up
+  to `2^24`, then fails with `Error::OutOfNodes`.
+- With a concrete center, the best-first loop is a copy of the explicit
+  one restricted to basic dominance, so that both expand the same states
+  in the same order.
 
 ### Checks
 
@@ -594,15 +604,35 @@ with the center path as in the explicit path.
   and the same `expanded`, `generated`, `dominated`, `dead_ends`, `stored`
   and `bound_pruned` counts, for uniform-cost search, A\*, anytime A\* and
   GBFS with both leaf modes; every plan validates.
+  The differential runs three times: every leaf symbolic, leaves with
+  fewer than 4 states enumerated (mixed), and every leaf enumerated inside
+  the symbolic search.
 - Size: one leaf of 20 binary variables, which the explicit path rejects
   with `LeafTooLarge`, is solved with a valid plan.
+- Symbolic center: on the same 60 random tasks and factorings,
+  uniform-cost search and A\* find the Dijkstra cost and GBFS finds a plan
+  exactly on solvable tasks, with symbolic and enumerated leaves and both
+  leaf modes; every plan validates. On `n = 8` center switches that turn on
+  independently (and one leaf), it stores `n + 1` nodes where the explicit
+  center stores `2^n`. On the random tasks, A\* keeps the Dijkstra cost
+  under every heuristic of the crate (`h^max`, both LM-cut modes,
+  merge-and-shrink), and the symbolic center stores a different number of
+  nodes than the concrete one in some runs, so merging and member-wise
+  dominance are exercised.
 - `benches/search.rs` (`bench_symbolic`), uniform-cost search under basic
   dominance, `--quick` on one machine: the gripper fork (tiny leaves) takes
   18 µs explicit and 363 µs symbolic; one leaf of `n` binary variables
   takes 53 µs against 541 µs at `n = 8`, 3.1 ms against 1.1 ms at
   `n = 12`, 35.5 ms against 2.2 ms at `n = 16`, and 6.8 ms symbolic at
   `n = 24`, where explicit leaves are rejected. Symbolic leaves pay off
-  once a leaf has a few thousand states.
+  once a leaf has a few thousand states. Mixed leaves on the gripper fork
+  (all leaves below the threshold, so enumerated inside the symbolic
+  search) take 142 µs against 309 µs all symbolic.
+- `bench_symbolic_center`: on `n` center switches the symbolic center
+  takes 558 µs against 154 µs explicit at `n = 6`, 1.7 ms against 8.0 ms
+  at `n = 10`, and 3.4 ms against 117 ms at `n = 14`; on the gripper fork,
+  where few center states share a pricing, 302 µs against 29 µs. It pays
+  off when many center states share their leaf pricing.
 
 ### Dependency
 
@@ -828,11 +858,11 @@ Invalid tasks are rejected via `Task::validate`.
 
 ## Limitations
 
-`inverted_fork` and `x_shape` may still split the inputs of a derived variable over two
-leaves (the search rejects those factorings and `auto` skips them). Also open: an index for
-the dominance store, a symbolic center (expanding sets of decoupled states at once), mixed
-explicit and symbolic leaves, the fork and inverted-fork refinements of
-decoupled strong stubborn sets, and multiple centers.
+`Factoring::generalized`
+approximates the paper's integer program greedily. Also open: an index for
+the dominance store, an index for the symbolic center's dominance scan (it only buckets by `g`), the fork and inverted-fork refinements of
+decoupled strong stubborn sets, and a nested hierarchy of factors (a decoupled group inside a
+leaf), which generalized factorings do not express (see Factoring strategies, item 7).
 
 ## Cross-crate needs
 
@@ -871,6 +901,8 @@ decoupled strong stubborn sets, and multiple centers.
 - Daniel Gnad, Álvaro Torralba and Jörg Hoffmann. *Symbolic Leaf
   Representation in Decoupled Search.* SoCS 2017, pp. 124–128. Technical
   report: <https://people.cs.aau.dk/~alto/papers/socs17-tr.pdf>.
+- Daniel Gnad, Álvaro Torralba and Daniel Fišer. *Beyond Stars – Generalized
+  Topologies for Decoupled Search.* ICAPS 2022, pp. 110–118.
 - Daniel Gnad, Valerie Poser and Jörg Hoffmann. *Beyond Forks: Finding and
   Ranking Star Factorings for Decoupled Search.* IJCAI 2017, pp. 4310–4316.
 - Álvaro Torralba, Daniel Gnad, Patrick Dubbert and Jörg Hoffmann. *On

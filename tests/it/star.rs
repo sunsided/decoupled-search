@@ -147,13 +147,18 @@ pub fn strategies(task: &Task) -> [(&'static str, Factoring); 6] {
     ]
 }
 
-/// Every strategy yields a strict star on star tasks and on unstructured
-/// random tasks.
+/// Every star strategy yields a strict star on star tasks and on
+/// unstructured random tasks; so does the automatic choice, unless it took
+/// the generalized factoring.
 #[test]
 fn strategies_yield_star_factorings() {
     let random = (0..SEEDS).map(|seed| random_task(seed, RandomTaskParams::default()));
     for task in (0..SEEDS).map(random_star_task).chain(random) {
+        let generalized = Factoring::generalized(&task);
         for (name, factoring) in strategies(&task) {
+            if name == "auto" && factoring == generalized {
+                continue;
+            }
             assert_eq!(factoring.check_star(&task), Ok(()), "{name}: {factoring:?}");
         }
     }
@@ -229,6 +234,10 @@ fn star_check_rejects_coupled_leaves() {
         wider.check_star(&writes_both),
         Err(Error::FactoringMismatch)
     );
+
+    let narrower = Factoring::new(&writes_both, vec![vec![0]]).expect("valid");
+    let three = random_task(0, RandomTaskParams::default());
+    assert_eq!(narrower.check_star(&three), Err(Error::FactoringMismatch));
 }
 
 /// `auto` picks a strategy's factoring with at least two mobile leaves
@@ -355,13 +364,14 @@ fn auto_falls_back_to_explicit_search() {
     assert_eq!(auto.center(), &[0, 1]);
 }
 
-/// The star strategies never split the inputs of a derived variable over
-/// two leaves, which the search would reject with
-/// [`Error::AxiomAcrossLeaves`]: here `d` (2) is derived from switches `x`
-/// (0) and `y` (1), which no operator connects, so a plain independent set
-/// of the causal graph would make both leaves, and incident arcs, with `d`
-/// in the center, would too. Both strategies treat `x` and `y` as adjacent
-/// and keep them in one leaf.
+/// No strategy splits the inputs of a derived variable over two leaves,
+/// which the search would reject with [`Error::AxiomAcrossLeaves`]: here
+/// `d` (2) is derived from switches `x` (0) and `y` (1), which no operator
+/// connects, so a plain independent set of the causal graph would make both
+/// leaves, and incident arcs, with `d` in the center, would too, as would
+/// the source components of inverted fork and X-shape. The strategies treat
+/// `x` and `y` as adjacent and keep them in one factor: incident arcs moves
+/// `x` to the center first, the independent set makes them one leaf.
 #[test]
 fn strategies_keep_axiom_inputs_in_one_factor() {
     let set = |var| Operator {
@@ -382,12 +392,21 @@ fn strategies_keep_axiom_inputs_in_one_factor() {
             head: Fact::new(2, 1),
         }],
     };
-    for factoring in [
-        Factoring::incident_arcs(&task),
-        Factoring::max_leaves(&task),
+    for (factoring, leaves) in [
+        (Factoring::incident_arcs(&task), [vec![1]]),
+        (Factoring::max_leaves(&task), [vec![0, 1]]),
     ] {
-        assert_eq!(factoring.leaves(), &[vec![0, 1]], "{factoring:?}");
+        assert_eq!(factoring.leaves(), &leaves, "{factoring:?}");
         assert_eq!(checked_cost(&task, &factoring), Some(2), "{factoring:?}");
+    }
+
+    for strategy in Strategy::ALL {
+        let factoring = Factoring::with_strategy(&task, strategy);
+        assert!(
+            factoring.score(&task).is_ok(),
+            "{strategy:?}: {factoring:?}"
+        );
+        assert_eq!(checked_cost(&task, &factoring), Some(2), "{strategy:?}");
     }
 
     let params = RandomTaskParams {
@@ -396,16 +415,107 @@ fn strategies_keep_axiom_inputs_in_one_factor() {
     };
     for seed in 0..SEEDS {
         let task = random_task(seed, params);
-        for factoring in [
-            Factoring::incident_arcs(&task),
-            Factoring::max_leaves(&task),
-        ] {
+        for strategy in Strategy::ALL {
+            let factoring = Factoring::with_strategy(&task, strategy);
             let score = factoring.score(&task);
             assert!(
                 !matches!(score, Err(Error::AxiomAcrossLeaves { .. })),
-                "seed {seed}: {factoring:?}"
+                "seed {seed}, {strategy:?}: {factoring:?}"
             );
+            if strategy != Strategy::Generalized {
+                assert_eq!(
+                    factoring.check_star(&task),
+                    Ok(()),
+                    "seed {seed}, {strategy:?}: {factoring:?}"
+                );
+            }
         }
+    }
+}
+
+/// A derived variable counts as the leaf it depends on: `d` (2) is derived
+/// from `a` (0), and the only operator on `b` (1) reads `d`. The search
+/// attaches `d` to `a`'s leaf, so with `a` and `b` in two leaves that
+/// operator reads one leaf and writes another; `check_star` says so, and no
+/// strategy returns a leaf that the search finds immobile.
+#[test]
+fn derived_variables_count_as_their_inputs() {
+    let op = |pre: Vec<Fact>, eff: Fact| Operator {
+        name: "op".into(),
+        pre,
+        eff: vec![Effect::new(eff)],
+        cost: 1,
+    };
+    let mut derived = Variable::new("d", 2);
+    derived.axiom_layer = Some(0);
+    let task = Task {
+        variables: vec![Variable::new("a", 2), Variable::new("b", 2), derived],
+        operators: vec![
+            op(vec![Fact::new(2, 1)], Fact::new(1, 1)),
+            op(vec![], Fact::new(0, 1)),
+        ],
+        initial: State(vec![0, 0, 0]),
+        goal: vec![Fact::new(1, 1)],
+        axioms: vec![Axiom {
+            conditions: vec![Fact::new(0, 1)],
+            head: Fact::new(2, 1),
+        }],
+    };
+
+    let split = Factoring::new(&task, vec![vec![0], vec![1]]).expect("valid");
+    assert_eq!(
+        split.check_star(&task),
+        Err(Error::NotStar { from: 0, to: 1 })
+    );
+    for strategy in Strategy::ALL {
+        let factoring = Factoring::with_strategy(&task, strategy);
+        let score = factoring.score(&task).expect("searchable");
+        assert_eq!(
+            score.mobile_leaves,
+            factoring.leaves().len(),
+            "{strategy:?}: {factoring:?}"
+        );
+        assert_eq!(checked_cost(&task, &factoring), Some(2), "{strategy:?}");
+    }
+}
+
+/// A derived variable that nothing reads does not take a sink component
+/// away from its input: switches `s1` (0) and `s2` (1) with `d1` (2) and
+/// `d2` (3) derived from them are both fork and X-shape leaves.
+#[test]
+fn unread_derived_variables_leave_fork_leaves_alone() {
+    let set = |var| Operator {
+        name: "set".into(),
+        pre: vec![],
+        eff: vec![Effect::new(Fact::new(var, 1))],
+        cost: 1,
+    };
+    let derived = |name| {
+        let mut v = Variable::new(name, 2);
+        v.axiom_layer = Some(0);
+        v
+    };
+    let from = |input, head| Axiom {
+        conditions: vec![Fact::new(input, 1)],
+        head: Fact::new(head, 1),
+    };
+    let task = Task {
+        variables: vec![
+            Variable::new("s1", 2),
+            Variable::new("s2", 2),
+            derived("d1"),
+            derived("d2"),
+        ],
+        operators: vec![set(0), set(1)],
+        initial: State(vec![0; 4]),
+        goal: vec![Fact::new(2, 1), Fact::new(3, 1)],
+        axioms: vec![from(0, 2), from(1, 3)],
+    };
+
+    for factoring in [Factoring::fork(&task), Factoring::x_shape(&task)] {
+        assert_eq!(factoring.leaves(), &[vec![0], vec![1]], "{factoring:?}");
+        assert_eq!(factoring.score(&task).map(|s| s.mobile_leaves), Ok(2));
+        assert_eq!(checked_cost(&task, &factoring), Some(2));
     }
 }
 

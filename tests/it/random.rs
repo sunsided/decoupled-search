@@ -30,7 +30,7 @@ fn partitions(vars: &[usize]) -> Vec<Vec<Vec<usize>>> {
     all
 }
 
-/// Every factoring tried on `task`.
+/// Every factoring tried on `task`: fork, generalized and explicit ones.
 pub fn factorings(task: &Task) -> Vec<Factoring> {
     let vars: Vec<usize> = (0..task.num_variables())
         .filter(|&v| !task.variables[v].is_derived())
@@ -38,7 +38,8 @@ pub fn factorings(task: &Task) -> Vec<Factoring> {
     let explicit = partitions(&vars)
         .into_iter()
         .map(|leaves| Factoring::new(task, leaves).expect("valid partition"));
-    std::iter::once(Factoring::fork(task))
+    [Factoring::fork(task), Factoring::generalized(task)]
+        .into_iter()
         .chain(explicit)
         .collect()
 }

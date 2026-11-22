@@ -40,16 +40,20 @@ pub enum Strategy {
     IncidentArcs,
     /// [`Factoring::max_leaves`], the independent-set strategy.
     MaxLeaves,
+    /// [`Factoring::generalized`]: leaves that may interact directly, around
+    /// a possibly empty center.
+    Generalized,
 }
 
 impl Strategy {
     /// Every strategy, in the order [`Factoring::auto`] breaks ties by.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Fork,
         Self::InvertedFork,
         Self::XShape,
         Self::IncidentArcs,
         Self::MaxLeaves,
+        Self::Generalized,
     ];
 }
 
@@ -257,6 +261,7 @@ impl Factoring {
             Strategy::XShape => Self::x_shape(task),
             Strategy::IncidentArcs => Self::incident_arcs(task),
             Strategy::MaxLeaves => Self::max_leaves(task),
+            Strategy::Generalized => Self::generalized(task),
         }
     }
 
@@ -332,7 +337,9 @@ impl Factoring {
     /// The best factoring of every [`Strategy`] for `task` with at least two
     /// mobile leaves, by score: the largest share of leaf actions, then more
     /// mobile leaves, then the smaller largest leaf, then the earlier
-    /// strategy in [`Strategy::ALL`].
+    /// strategy in [`Strategy::ALL`]. [`Strategy::Generalized`] comes last
+    /// there, so it wins only when it scores strictly better than every star
+    /// strategy; its leaves may then interact directly.
     ///
     /// Factorings that [`Factoring::score`] rejects (for example because
     /// an axiom spans two of their leaves) are skipped. If no candidate has

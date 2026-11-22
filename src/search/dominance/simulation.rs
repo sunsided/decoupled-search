@@ -43,14 +43,9 @@ use crate::decoupled::{Leaf, LeafPart, Price, View};
 pub(crate) struct Bits(Vec<u64>);
 
 impl Bits {
-    /// The set of all `n` leaf states, if `full`, or the empty set.
-    fn new(n: usize, full: bool) -> Self {
-        let mut words = vec![if full { u64::MAX } else { 0 }; n.div_ceil(64)];
-        if full && !n.is_multiple_of(64) {
-            *words.last_mut().expect("n > 0") = (1 << (n % 64)) - 1;
-        }
-
-        Self(words)
+    /// The empty set over `n` leaf states.
+    fn empty(n: usize) -> Self {
+        Self(vec![0; n.div_ceil(64)])
     }
 
     /// Whether `i` is in the set.
@@ -316,7 +311,7 @@ fn initial_relation(view: &View<'_>, transitions: &Transitions) -> Vec<Bits> {
     let n = view.leaf.size;
     (0..n)
         .map(|x| {
-            let mut simulators = Bits::new(n, false);
+            let mut simulators = Bits::empty(n);
             for y in 0..n {
                 let goal = !view.is_goal(x) || view.is_goal(y);
                 let pre = transitions.global[x]

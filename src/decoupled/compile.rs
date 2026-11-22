@@ -19,7 +19,7 @@ use super::{
     CenterEffect, DecoupledTask, GlobalAction, Leaf, LeafAction, LeafFact, LeafPart, Price, widen,
 };
 use crate::heuristic::fact_offsets;
-use crate::{Error, Factoring, MAX_LEAF_STATES};
+use crate::{Error, Factoring};
 
 /// Where a task variable lives in the decoupled task.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,6 +108,10 @@ pub(super) fn compile(task: &Task, factoring: &Factoring) -> Result<DecoupledTas
                 .push(leaf_action(op, cost, pre, eff, leaf)),
             None => globals.push(global_action(op, cost, pre, eff)),
         }
+    }
+
+    for leaf in &mut leaves {
+        leaf.index_center_reads();
     }
 
     let initial = task.initial_state();
@@ -285,44 +289,23 @@ fn derived_leaf(
 ///
 /// # Errors
 ///
-/// [`Error::LeafTooLarge`] if the leaf has more than [`MAX_LEAF_STATES`] states.
+/// [`Error::LeafTooLarge`] if the leaf has more than
+/// [`crate::MAX_LEAF_STATES`] states.
 fn compile_leaf(
     task: &Task,
     vars: &[VarId],
     index: usize,
     derived: super::Scope,
 ) -> Result<Leaf, Error> {
-    let domains: Vec<usize> = vars
+    let domains = vars
         .iter()
         .map(|&v| widen(task.variables[v].domain_size))
         .collect();
-    let mut strides = Vec::with_capacity(vars.len());
-    let mut size = 1_usize;
-    for &d in &domains {
-        strides.push(size);
-        size = size
-            .checked_mul(d)
-            .filter(|&s| s <= MAX_LEAF_STATES)
-            .ok_or(Error::LeafTooLarge { leaf: index })?;
-    }
-
-    let initial = vars
-        .iter()
-        .zip(&strides)
-        .map(|(&v, &stride)| widen(task.initial.0[v]) * stride)
-        .sum();
-
-    Ok(Leaf {
-        vars: vars.to_vec(),
-        strides,
-        domains,
-        size,
-        initial,
-        derived,
-        goal: Vec::new(),
-        actions: Vec::new(),
-        disabled: Vec::new(),
-    })
+    let initial: Vec<usize> = vars.iter().map(|&v| widen(task.initial.0[v])).collect();
+    let mut leaf =
+        Leaf::new(vars.to_vec(), domains, &initial).ok_or(Error::LeafTooLarge { leaf: index })?;
+    leaf.derived = derived;
+    Ok(leaf)
 }
 
 /// Splits `facts` into center facts and per-leaf facts.

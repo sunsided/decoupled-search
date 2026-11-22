@@ -113,9 +113,69 @@ pub(crate) struct Leaf {
     /// `rank * actions.len() + action`; empty if none are. Leaf closure
     /// skips them.
     pub(crate) disabled: Vec<bool>,
+    /// The center slots leaf closure reads (center preconditions of leaf
+    /// actions and center conditions of their effects), sorted; `None` if
+    /// derived variables attached to the leaf read the center too. Filled
+    /// by [`Leaf::index_center_reads`] once the actions are in.
+    pub(crate) center_reads: Option<Vec<usize>>,
 }
 
 impl Leaf {
+    /// The leaf over state variables `vars` with `domains` and the initial
+    /// leaf state `initial` (one value per variable); attached derived
+    /// variables, goal and actions are filled in later. `None` if it has
+    /// more than [`crate::MAX_LEAF_STATES`] states.
+    pub(crate) fn new(vars: Vec<VarId>, domains: Vec<usize>, initial: &[usize]) -> Option<Self> {
+        let mut strides = Vec::with_capacity(domains.len());
+        let mut size = 1_usize;
+        for &d in &domains {
+            strides.push(size);
+            size = size
+                .checked_mul(d)
+                .filter(|&s| s <= crate::MAX_LEAF_STATES)?;
+        }
+
+        let initial = initial.iter().zip(&strides).map(|(v, s)| v * s).sum();
+        Some(Self {
+            vars,
+            strides,
+            domains,
+            size,
+            initial,
+            derived: Scope::default(),
+            goal: Vec::new(),
+            actions: Vec::new(),
+            disabled: Vec::new(),
+            center_reads: None,
+        })
+    }
+
+    /// Records which center slots leaf closure reads, from the leaf
+    /// actions; call after adding the last one.
+    pub(crate) fn index_center_reads(&mut self) {
+        if !self.derived.is_empty() {
+            self.center_reads = None;
+            return;
+        }
+
+        let pre = self.actions.iter().flat_map(|a| &a.center_pre);
+        let cond = (self.actions.iter())
+            .flat_map(|a| &a.part.eff)
+            .flat_map(|e| &e.center_cond);
+        let mut slots: Vec<usize> = pre.chain(cond).map(|f| f.var).collect();
+        slots.sort_unstable();
+        slots.dedup();
+        self.center_reads = Some(slots);
+    }
+
+    /// Whether leaf closure may differ between centers `before` and
+    /// `after`: some slot it reads changed, or it is not indexed.
+    pub(crate) fn sees_change(&self, before: &[Value], after: &[Value]) -> bool {
+        self.center_reads
+            .as_ref()
+            .is_none_or(|slots| slots.iter().any(|&s| before[s] != after[s]))
+    }
+
     /// Price vector with only the initial leaf state reached, at price 0.
     pub(crate) fn initial_prices(&self) -> Vec<Price> {
         let mut prices = vec![UNREACHED; self.size];
@@ -154,7 +214,8 @@ impl Leaf {
     /// The view of a leaf that does not read the center (see
     /// [`Leaf::reads_center`]), valid under every center. Center
     /// preconditions of leaf actions are not checked by its rank-level
-    /// operations, only by [`View::close`], which must not be called on it.
+    /// operations, only by [`View::close`], which must not be called on it
+    /// ([`View::close_by`] may, with its own choice of actions).
     pub(crate) fn static_view(&self) -> View<'_> {
         debug_assert!(self.derived.is_empty(), "derived slots read the center");
         View {
@@ -287,13 +348,26 @@ impl View<'_> {
     /// with zero-cost actions. Without `costs`, every action counts as free,
     /// so only reachability is recorded.
     pub(crate) fn close(&self, prices: &mut [Price], costs: bool) -> Vec<Step> {
+        self.close_by(prices, costs, |a| {
+            self.center_holds(&self.leaf.actions[a].center_pre)
+        })
+    }
+
+    /// [`View::close`] over the leaf actions whose index `usable` accepts,
+    /// whatever the view's center.
+    pub(crate) fn close_by(
+        &self,
+        prices: &mut [Price],
+        costs: bool,
+        usable: impl Fn(usize) -> bool,
+    ) -> Vec<Step> {
         let count = self.leaf.actions.len();
         let actions: Vec<(usize, &LeafAction)> = self
             .leaf
             .actions
             .iter()
             .enumerate()
-            .filter(|(_, a)| self.center_holds(&a.center_pre))
+            .filter(|&(i, _)| usable(i))
             .collect();
         let disabled = |rank: usize, index: usize| {
             self.leaf
@@ -332,12 +406,17 @@ impl View<'_> {
         steps
     }
 
-    /// Lowers `out[offsets[var] + value]` to the cheapest price in `prices`
-    /// of a reached leaf state with `var = value`, for every leaf variable
-    /// and attached derived variable.
-    pub(crate) fn lower_fact_prices(&self, prices: &Prices, offsets: &[usize], out: &mut [Price]) {
+    /// Lowers `out[offsets[var] + value]` to the cheapest price among the
+    /// `reached` leaf states (as `(rank, price)`) with `var = value`, for
+    /// every leaf variable and attached derived variable.
+    pub(crate) fn lower_fact_prices(
+        &self,
+        reached: impl Iterator<Item = (usize, Price)>,
+        offsets: &[usize],
+        out: &mut [Price],
+    ) {
         let slots = self.leaf.vars.iter().chain(&self.leaf.derived.vars);
-        for (rank, price) in prices.iter() {
+        for (rank, price) in reached {
             for (slot, &var) in slots.clone().enumerate() {
                 let fact = &mut out[offsets[var] + self.value(rank, slot)];
                 *fact = (*fact).min(price);

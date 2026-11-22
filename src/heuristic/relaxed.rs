@@ -7,7 +7,7 @@ use core::cmp::Reverse;
 
 use sas_plus::{Effect, Fact, OpId, Task};
 
-use super::FactPrices;
+use super::{FactPrices, fact_offsets};
 
 /// The cost of a fact that the relaxation does not reach.
 const UNREACHED: u64 = u64::MAX;
@@ -71,12 +71,10 @@ impl Relaxation {
     ///
     /// Panics if `task` fails [`Task::validate`].
     pub(crate) fn new(task: &Task) -> Self {
-        let mut offsets = Vec::with_capacity(task.num_variables());
-        let mut facts = Vec::new();
-        for (var, variable) in task.variables.iter().enumerate() {
-            offsets.push(facts.len());
-            facts.extend((0..variable.domain_size).map(|value| Fact::new(var, value)));
-        }
+        let offsets = fact_offsets(task);
+        let facts: Vec<Fact> = (task.variables.iter().enumerate())
+            .flat_map(|(var, v)| (0..v.domain_size).map(move |value| Fact::new(var, value)))
+            .collect();
 
         let index = |f: &Fact| offsets[f.var] + usize::try_from(f.value).expect("u32 fits usize");
         let relaxed = |pre: &mut dyn Iterator<Item = &Fact>, eff: Vec<usize>, cost, source| {
@@ -252,8 +250,14 @@ impl Run {
 
     /// Applies operator `op`, whose preconditions are all settled, lowering
     /// the cost of its effects.
+    ///
+    /// The cost saturates one below [`UNREACHED`]: `h^add` sums can pass
+    /// `u64::MAX` on deep tasks, and a reached fact must never read as
+    /// unreached.
     fn fire(&mut self, relaxation: &Relaxation, op: usize) {
-        let reached = self.value[op].saturating_add(relaxation.ops[op].cost);
+        let reached = self.value[op]
+            .saturating_add(relaxation.ops[op].cost)
+            .min(UNREACHED - 1);
         for &e in &relaxation.ops[op].eff {
             if reached < self.explored.cost[e] {
                 self.explored.cost[e] = reached;
@@ -319,5 +323,47 @@ mod tests {
         assert_eq!(relaxation.h_ff(&seeded(&offsets, 4)), Some(9));
         assert_eq!(relaxation.h_max(&seeded(&offsets, u64::MAX)), None);
         assert_eq!(relaxation.h_ff(&seeded(&offsets, u64::MAX)), None);
+    }
+
+    /// `levels` levels of two facts, each level's two operators needing both facts
+    /// of the level below: `h^add` doubles per level and passes `u64::MAX`.
+    fn doubling(levels: usize) -> Task {
+        let var = |level: usize, which: usize| 2 * level + which;
+        let mut operators = Vec::new();
+        for level in 1..=levels {
+            for which in 0..2 {
+                operators.push(Operator {
+                    name: "op".into(),
+                    pre: vec![
+                        Fact::new(var(level - 1, 0), 1),
+                        Fact::new(var(level - 1, 1), 1),
+                    ],
+                    eff: vec![Effect::new(Fact::new(var(level, which), 1))],
+                    cost: 1,
+                });
+            }
+        }
+
+        let mut initial = vec![0; 2 * (levels + 1)];
+        initial[0] = 1;
+        initial[1] = 1;
+        Task {
+            variables: (0..initial.len()).map(|_| Variable::new("v", 2)).collect(),
+            operators,
+            initial: State(initial),
+            goal: vec![Fact::new(var(levels, 0), 1)],
+            axioms: vec![],
+        }
+    }
+
+    /// A saturated `h^add` sum still reaches the goal, so `h^FF` is finite.
+    #[test]
+    fn saturated_sums_stay_reached() {
+        let task = doubling(70);
+        let relaxation = Relaxation::new(&task);
+        let prices = FactPrices::from_state(&task, &task.initial);
+
+        assert_eq!(relaxation.h_max(&prices), Some(70));
+        assert_eq!(relaxation.h_ff(&prices), Some(139));
     }
 }

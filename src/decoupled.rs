@@ -27,6 +27,8 @@ use crate::{Error, Factoring};
 use axioms::{Axioms, Scope};
 pub(crate) use compile::{leaf_action_of, mobile_leaves};
 pub(crate) use leaf::{Leaf, LeafAction, LeafFact, LeafPart, Price, UNREACHED, View};
+#[cfg(feature = "symbolic-leaves")]
+pub(crate) use leaf::{LeafEffect, Step};
 pub(crate) use prices::Prices;
 
 /// One effect of a global action on a center variable.
@@ -142,42 +144,38 @@ impl DecoupledTask {
     }
 
     /// The successor of `state` under global action `index`, or `None` if it
-    /// is not applicable.
+    /// is not applicable: the center after the action, and every leaf's
+    /// prices carried across it and closed under that center. A leaf the
+    /// action does not touch and whose closure reads no changed center slot
+    /// keeps its prices, which are already closed.
     pub(crate) fn successor(&self, index: usize, state: &DecoupledState) -> Option<DecoupledState> {
         let action = &self.globals[index];
         if !holds(&action.center_pre, &state.center) {
             return None;
         }
 
-        let dense = self.transferred(action, state)?;
-        Some(self.closed(self.next_center(action, &state.center), dense))
-    }
-
-    /// The dense prices of every leaf of `state` carried across `action`
-    /// (unchanged for leaves it does not touch); `None` if a leaf it touches
-    /// has no reached leaf state satisfying its preconditions.
-    pub(crate) fn transferred(
-        &self,
-        action: &GlobalAction,
-        state: &DecoupledState,
-    ) -> Option<Vec<Vec<Price>>> {
-        let mut dense = Vec::with_capacity(self.leaves.len());
+        let center = self.next_center(action, &state.center);
+        let mut prices = Vec::with_capacity(self.leaves.len());
         for (leaf, (part, old)) in action.parts.iter().zip(&state.prices).enumerate() {
-            let old = old.to_dense(self.leaves[leaf].size);
-            let Some(part) = part else {
-                dense.push(old);
+            let compiled = &self.leaves[leaf];
+            if part.is_none() && !compiled.sees_change(&state.center, &center) {
+                prices.push(old.clone());
                 continue;
-            };
-
-            let next = self.view(leaf, &state.center).transfer(part, &old);
-            if next.iter().all(|&p| p == UNREACHED) {
-                return None;
             }
 
-            dense.push(next);
+            let mut dense = old.to_dense(compiled.size);
+            if let Some(part) = part {
+                dense = self.view(leaf, &state.center).transfer(part, &dense);
+                if dense.iter().all(|&p| p == UNREACHED) {
+                    return None;
+                }
+            }
+
+            self.close(leaf, &center, &mut dense);
+            prices.push(Prices::from_dense(&dense));
         }
 
-        Some(dense)
+        Some(DecoupledState { center, prices })
     }
 
     /// The center after applying `action` to `center`: firing effects in
@@ -233,7 +231,7 @@ impl DecoupledTask {
 
         for (leaf, leaf_prices) in state.prices.iter().enumerate() {
             self.view(leaf, &state.center).lower_fact_prices(
-                leaf_prices,
+                leaf_prices.iter(),
                 &self.fact_offsets,
                 &mut prices,
             );

@@ -31,7 +31,8 @@ use sas_plus::{Task, Value};
 
 use crate::decoupled::{DecoupledState, DecoupledTask, Price};
 use crate::{DecoupledHeuristic, Error, Factoring, Plan};
-use dominance::{Bounds, Dominance, simulation};
+pub(crate) use dominance::simulation;
+use dominance::{Bounds, Dominance};
 use stubborn::StubbornSets;
 
 /// How the open list is ordered.
@@ -356,10 +357,11 @@ pub struct Config {
     ///   [`Config::reduce_leaves`] rest on the randomized cross-checks
     ///   against Dijkstra only.
     pub stubborn_sets: bool,
-    /// Whether to keep every leaf's pricing function as binary decision
-    /// diagrams, one per price, instead of a price per enumerated leaf state
-    /// (Gnad, Torralba and Hoffmann 2017). Needs the `symbolic-leaves`
-    /// feature. Default: `false`.
+    /// Whether to keep the pricing function of every leaf with at least
+    /// [`Config::symbolic_min_states`] states as binary decision diagrams,
+    /// one per price, instead of a price per enumerated leaf state (Gnad,
+    /// Torralba and Hoffmann 2017); smaller leaves stay enumerated. Needs
+    /// the `symbolic-leaves` feature. Default: `false`.
     ///
     /// The decoupled state space is the same as with explicit leaves, so
     /// costs, plans and the number of expanded states agree; leaves larger
@@ -370,6 +372,26 @@ pub struct Config {
     /// [`Config::stubborn_sets`], conditional effects and axioms are
     /// rejected with [`Error::SymbolicUnsupported`].
     pub symbolic_leaves: bool,
+    /// The fewest leaf states for which [`Config::symbolic_leaves`] uses
+    /// diagrams; 0 makes every leaf symbolic. Default: 1024, about where
+    /// diagrams start to pay off on the crate's benchmark.
+    pub symbolic_min_states: usize,
+    /// Whether to expand sets of center states at once: a search node is a
+    /// set of center states, kept as a BDD, that share one pricing function
+    /// and one `g`. Needs the `symbolic-leaves` feature; leaves follow
+    /// [`Config::symbolic_leaves`] and [`Config::symbolic_min_states`].
+    /// Default: `false`.
+    ///
+    /// This is the crate's own formulation, not a published one;
+    /// `docs/design.md` argues why it is sound, and the randomized
+    /// cross-checks against Dijkstra test it. Each member is an ordinary
+    /// decoupled state, so cost-optimal searches stay optimal; the nodes
+    /// differ from the explicit search's, so the counters do too. Supports uniform-cost search, A* and GBFS with
+    /// [`Pruning::Basic`] and [`Config::fold_g`] off, under the same
+    /// restrictions as [`Config::symbolic_leaves`]; anytime A* and `fold_g`
+    /// are rejected with [`Error::SymbolicUnsupported`]. Heuristics see a
+    /// center fact as reached when some member has it.
+    pub symbolic_center: bool,
 }
 
 impl Default for Config {
@@ -382,6 +404,8 @@ impl Default for Config {
             reduce_leaves: false,
             stubborn_sets: false,
             symbolic_leaves: false,
+            symbolic_min_states: 1024,
+            symbolic_center: false,
         }
     }
 }
@@ -766,13 +790,13 @@ impl Config {
         order: Order,
         limit: Option<u64>,
     ) -> Result<(Outcome, Probe), Error> {
-        if self.symbolic_leaves {
+        if self.symbolic_leaves || self.symbolic_center {
             #[cfg(feature = "symbolic-leaves")]
             return crate::symbolic::run(self, task, factoring, (heuristic, root), order)
                 .map(|outcome| (outcome, Probe::default()));
             #[cfg(not(feature = "symbolic-leaves"))]
             return Err(Error::SymbolicUnsupported {
-                option: "symbolic leaves without the symbolic-leaves feature",
+                option: "symbolic leaves or center without the symbolic-leaves feature",
             });
         }
 
