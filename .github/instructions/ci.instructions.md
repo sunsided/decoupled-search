@@ -26,11 +26,8 @@ applyTo: ".github/workflows/**,Taskfile.dist.yaml,**/Taskfile.dist.yaml,.pre-com
   `actions-lint.yml`.
 - `no-std` mirrors `task build:no-std`: the library for `thumbv7em-none-eabihf` with
   `--no-default-features` and with `--all-features`. Do not drop either build.
-- `cargo fmt` runs without `--all`, here and in `fuzz/`.
 - `msrv` checks the library only (`cargo hack check --rust-version --all-features`, no
   `--all-targets`): dev-dependencies may need a newer Rust. Do not add `--all-targets` back.
-- zizmor's `self-repository` audit is disabled in `.github/zizmor.yml`: actionlint does not
-  accept the `$/` form yet. Re-enable it once actionlint does.
 - `fuzz/` is a separate nightly workspace. Its tasks live in `fuzz/Taskfile.dist.yaml`,
   included as `fuzz:`; CI's `fuzz` job mirrors `task fuzz:build` and `task fuzz:lint`.
 - No `Cargo.lock` is tracked (root or `fuzz/`): this is a library. CI resolves fresh from

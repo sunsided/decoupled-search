@@ -125,7 +125,7 @@ println!("{:?}", outcome.statistics);
 - `merge-and-shrink`: `MasHeuristic`, an admissible merge-and-shrink heuristic on decoupled
   states, from [merge-and-shrink](https://crates.io/crates/merge-and-shrink).
 - `lm-cut`: `LmCutHeuristic`, an admissible LM-cut heuristic on decoupled states, from
-  [planning-heuristics](https://github.com/sunsided/planning-heuristics).
+  [planning-heuristics](https://crates.io/crates/planning-heuristics).
 
 The crate is `no_std` with `alloc`, with and without the features.
 
