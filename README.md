@@ -49,7 +49,9 @@ More detail, including how each rule maps to the papers, is in
 
 - Factorings: fork, inverted fork, X-shape, and the incident-arcs and
   independent-set (maximum leaves) strict-star strategies of Gnad, Poser
-  and Hoffmann (IJCAI 2017), explicit partitions, and a strict-star check.
+  and Hoffmann (IJCAI 2017), the generalized factorings of Gnad, Torralba
+  and Fišer (ICAPS 2022) with directly interacting leaves and a possibly
+  empty center, explicit partitions, and a strict-star check.
   `Factoring::score` reports leaves, mobile leaves, the leaf-action share
   and leaf sizes; `Factoring::auto` picks the best-scored strategy with at
   least two mobile leaves and otherwise falls back to explicit search;

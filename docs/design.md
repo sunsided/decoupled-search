@@ -30,9 +30,15 @@ not affect the center affects only one leaf and has preconditions only on
 it and the center. Our leaf actions are exactly those actions (their
 *leaf-only* actions); we additionally accept actions that affect the center
 or several leaves, and actions that read another leaf, as global actions,
-so arbitrary partitions are searchable. The strategies below produce
-*strict-star* factorings (every causal-graph arc between factors touches
-the center), which are star factorings.
+so arbitrary partitions are searchable. These are the *generalized
+factorings* of Gnad, Torralba and Fišer (ICAPS 2022, Definitions 3 and 4:
+any partition, a possibly empty center, and every action that is not
+leaf-only is global); their Theorem 1 maps one to a star factoring of the
+task with one extra unary center variable that every global action sets,
+with the same decoupled state space, so the search stays sound, complete
+and optimal. Strategies 1 to 6 below produce *strict-star* factorings
+(every causal-graph arc between factors touches the center), which are
+star factorings; strategy 7 produces generalized ones.
 
 Strategies:
 
@@ -70,9 +76,23 @@ Strategies:
    test checks it against brute force. Growing tracks mobility
    incrementally: without axioms, moving `v` into leaf `L` can only change
    `L`'s mobility, through operators touching `v`.
+7. **Generalized**, `Factoring::generalized` (Gnad, Torralba and Fišer,
+   ICAPS 2022). The candidate leaves are the paper's potential leaves, the
+   effect variable sets of the operators. The paper picks leaves with an
+   integer program maximizing the number of mobile leaves (objective L);
+   here a greedy pass approximates it: candidates smallest first, then by
+   how few other candidates they overlap, then by how many operators share
+   the effect set, and a candidate stays only if it is disjoint from the
+   leaves so far and it and every earlier leaf stay mobile. Leaves may read
+   and write each other (those operators are global) and the center may
+   be empty. On the paper's Example 1 (agents that charge each other's
+   batteries) it finds one leaf per agent with its battery around an empty
+   center, where no star strategy has two mobile leaves. The other
+   objectives (mobility, balanced mobility, fact flexibility) and the
+   minimum leaf flexibility constraint are not implemented.
 
 `Factoring::check_star` reports the first causal-graph arc between two
-leaves (`Error::NotStar`). Every strategy except `Factoring::new` passes
+leaves (`Error::NotStar`). Every strategy except `Factoring::new` and `Factoring::generalized` passes
 it; search does not require it. Derived variables are never leaf
 variables: the strategies move them to the center (see
 [Conditional effects and axioms](#conditional-effects-and-axioms)).
@@ -829,10 +849,12 @@ Invalid tasks are rejected via `Task::validate`.
 ## Limitations
 
 `inverted_fork` and `x_shape` may still split the inputs of a derived variable over two
-leaves (the search rejects those factorings and `auto` skips them). Also open: an index for
+leaves (the search rejects those factorings and `auto` skips them). `Factoring::generalized`
+approximates the paper's integer program greedily. Also open: an index for
 the dominance store, a symbolic center (expanding sets of decoupled states at once), mixed
 explicit and symbolic leaves, the fork and inverted-fork refinements of
-decoupled strong stubborn sets, and multiple centers.
+decoupled strong stubborn sets, and a hierarchy of factors (several nested centers), which
+generalized factorings do not express.
 
 ## Cross-crate needs
 
@@ -871,6 +893,8 @@ decoupled strong stubborn sets, and multiple centers.
 - Daniel Gnad, Álvaro Torralba and Jörg Hoffmann. *Symbolic Leaf
   Representation in Decoupled Search.* SoCS 2017, pp. 124–128. Technical
   report: <https://people.cs.aau.dk/~alto/papers/socs17-tr.pdf>.
+- Daniel Gnad, Álvaro Torralba and Daniel Fišer. *Beyond Stars – Generalized
+  Topologies for Decoupled Search.* ICAPS 2022, pp. 110–118.
 - Daniel Gnad, Valerie Poser and Jörg Hoffmann. *Beyond Forks: Finding and
   Ranking Star Factorings for Decoupled Search.* IJCAI 2017, pp. 4310–4316.
 - Álvaro Torralba, Daniel Gnad, Patrick Dubbert and Jörg Hoffmann. *On

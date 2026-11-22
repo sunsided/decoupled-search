@@ -1,6 +1,7 @@
 //! Center/leaf partitions of a task's variables, and strategies that derive
 //! them from the causal graph.
 
+mod generalized;
 mod scoring;
 mod star;
 

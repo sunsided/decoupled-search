@@ -147,13 +147,18 @@ pub fn strategies(task: &Task) -> [(&'static str, Factoring); 6] {
     ]
 }
 
-/// Every strategy yields a strict star on star tasks and on unstructured
-/// random tasks.
+/// Every star strategy yields a strict star on star tasks and on
+/// unstructured random tasks; so does the automatic choice, unless it took
+/// the generalized factoring.
 #[test]
 fn strategies_yield_star_factorings() {
     let random = (0..SEEDS).map(|seed| random_task(seed, RandomTaskParams::default()));
     for task in (0..SEEDS).map(random_star_task).chain(random) {
+        let generalized = Factoring::generalized(&task);
         for (name, factoring) in strategies(&task) {
+            if name == "auto" && factoring == generalized {
+                continue;
+            }
             assert_eq!(factoring.check_star(&task), Ok(()), "{name}: {factoring:?}");
         }
     }
