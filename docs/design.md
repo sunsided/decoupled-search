@@ -425,6 +425,93 @@ never needed there either.
 - `Statistics::stubborn_pruned` counts the applicable global actions the
   sets leave out.
 
+## Symbolic leaves (proposed)
+
+*Status: design for review; nothing below is implemented.*
+
+Gnad, Torralba and Hoffmann (SoCS 2017) keep each leaf's pricing
+function as binary decision diagrams instead of an explicit price per leaf
+state. The decoupled state space does not change: the same center paths,
+the same prices, the same plans. Only the representation does, so leaves
+far larger than `MAX_LEAF_STATES` become usable when their reachable sets
+have small diagrams. The paper does not expand sets of decoupled states
+at once (a symbolic center); that part of issue #1 stays open.
+
+### Representation
+
+- *Encoding.* Each leaf variable gets `ceil(log2 |D(v)|)` bits; current
+  and next bits are interleaved per leaf, in leaf variable order. Each
+  leaf has its own BDD manager, so leaves never share variables.
+- *Transition relations.* One relation per leaf action projected onto its
+  leaf, grouped by (cost, center precondition), and one per global part on
+  the leaf (cost 0 in the leaf; the action's cost is in `g`).
+- *Pricing function.* Per leaf, a list of layers `(price, depth, set)`,
+  ascending in `(price, depth)`, pairwise disjoint, every leaf state at its
+  cheapest price. `depth` counts the 0-cost image steps inside a price, so
+  reconstruction can always step back to a strictly smaller key. The
+  reached set is the union of the layers.
+
+### Operations
+
+The explicit path's operations, each with its symbolic form:
+
+| Explicit | Symbolic |
+| --- | --- |
+| closure (`View::close`) | symbolic Dijkstra per leaf from the current layers, over the relations whose center precondition holds; 0-cost relations iterate to a fixpoint within a price, each round a new `depth` |
+| transfer across a global action | per layer: intersect with the part's precondition, image through its relation, then subtract all cheaper layers to restore disjointness |
+| applicability (reached precondition) | some layer intersects the precondition BDD |
+| goal price | least price whose layer intersects the leaf goal BDD |
+| `FactPrices` (all heuristics) | per leaf fact, least price whose layer intersects the fact's BDD |
+| dominance, `Pruning::Basic` | same center, `g` no higher, and every layer `(p, S)` of the new state has `S` inside the union of the stored state's layers of price at most `p` |
+| `min_goal_price` (anytime A\*) | symbolic Dijkstra on all leaf relations, center ignored |
+| plan reconstruction | see below |
+
+*Reconstruction (this crate's design; the paper does not describe it).*
+Walk the center path backwards, one leaf at a time, with a single leaf
+state `x` at key `(p, d)` in node `k`, starting from a cheapest goal leaf
+state `pick`ed from the final node. Either some leaf relation of cost `c`
+active under node `k`'s center has a predecessor of `x` in node `k`'s
+layer at `p - c` (at depth `d - 1` if `c = 0`): step back to it and record
+the action; or `x` came in with the transfer, and node `k - 1` has a leaf
+state `y` at price `p` whose global part leads to `x`: continue from `y` in
+node `k - 1`. The key falls strictly in each step, so the walk ends at the
+initial leaf state in the initial node. Leaf actions are then interleaved
+with the center path as in the explicit path.
+
+### Scope of a first version
+
+- `Config::symbolic_leaves: bool` switches every leaf to the symbolic
+  representation. Mixed explicit and symbolic leaves (the paper's best
+  configuration) can follow.
+- Supported: uniform-cost search, A\*, anytime A\* and GBFS, priced and
+  reachability-only leaves, `Pruning::Basic` without `fold_g`, every
+  heuristic that reads only `FactPrices` (`HMax`, `HFf`, `LmCutHeuristic`;
+  the paper's symbolic LM-cut is not needed because the seeded LM-cut here
+  already works on per-fact prices).
+- Rejected with an error: the other dominance criteria and `fold_g` (they
+  analyse explicit leaf states), `reduce_leaves`, `stubborn_sets`,
+  `MasHeuristic`, conditional effects and axioms.
+
+### Checks
+
+- Differential: on every random cross-check task and factoring, symbolic
+  and explicit search under `Basic` without `fold_g` give the same plan
+  cost and the same `expanded`, `generated` and `stored` counts, since the
+  state spaces are identical and successors come in the same order.
+- Size: a task with a leaf above `MAX_LEAF_STATES` (the explicit path
+  returns `LeafTooLarge`) that the symbolic path solves.
+- A benchmark with growing leaves, explicit against symbolic.
+
+### Open decisions
+
+- *BDD library.* `symbolic-search` already wraps oxidd behind its public
+  `backend::Backend` trait, but it needs `std` and Rust 1.91, while this
+  crate is `no_std` at Rust 1.86. As an optional feature it would break the
+  all-features `no_std` and MSRV jobs and the "no_std with and without the
+  features" promise unless those exclude it.
+- *Version.* `Config` gains another public field: the next release after
+  0.2.0 is 0.3.0.
+
 ## Reachability-only leaves
 
 `Leaves::Reachability` closes leaves with every leaf action at cost 0, so
@@ -682,6 +769,9 @@ decoupled strong stubborn sets, and multiple centers.
 - Daniel Gnad, Jörg Hoffmann and Martin Wehrle. *Strong Stubborn Set
   Pruning for Star-Topology Decoupled State Space Search.* JAIR 65 (2019),
   pp. 343–392. doi:10.1613/jair.1.11576.
+- Daniel Gnad, Álvaro Torralba and Jörg Hoffmann. *Symbolic Leaf
+  Representation in Decoupled Search.* SoCS 2017, pp. 124–128. Technical
+  report: <https://people.cs.aau.dk/~alto/papers/socs17-tr.pdf>.
 - Daniel Gnad, Valerie Poser and Jörg Hoffmann. *Beyond Forks: Finding and
   Ranking Star Factorings for Decoupled Search.* IJCAI 2017, pp. 4310–4316.
 - Álvaro Torralba, Daniel Gnad, Patrick Dubbert and Jörg Hoffmann. *On
