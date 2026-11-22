@@ -31,7 +31,8 @@ use sas_plus::{Task, Value};
 
 use crate::decoupled::{DecoupledState, DecoupledTask, Price};
 use crate::{DecoupledHeuristic, Error, Factoring, Plan};
-use dominance::{Bounds, Dominance, simulation};
+pub(crate) use dominance::simulation;
+use dominance::{Bounds, Dominance};
 use stubborn::StubbornSets;
 
 /// How the open list is ordered.

@@ -27,6 +27,8 @@ use crate::{Error, Factoring};
 use axioms::{Axioms, Scope};
 pub(crate) use compile::{leaf_action_of, mobile_leaves};
 pub(crate) use leaf::{Leaf, LeafAction, LeafFact, LeafPart, Price, UNREACHED, View};
+#[cfg(feature = "symbolic-leaves")]
+pub(crate) use leaf::{LeafEffect, Step};
 pub(crate) use prices::Prices;
 
 /// One effect of a global action on a center variable.
@@ -233,7 +235,7 @@ impl DecoupledTask {
 
         for (leaf, leaf_prices) in state.prices.iter().enumerate() {
             self.view(leaf, &state.center).lower_fact_prices(
-                leaf_prices,
+                leaf_prices.iter(),
                 &self.fact_offsets,
                 &mut prices,
             );

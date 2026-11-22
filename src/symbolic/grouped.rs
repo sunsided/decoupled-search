@@ -23,12 +23,12 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::cmp::Reverse;
 
-use alloc::collections::BinaryHeap;
+use alloc::collections::{BTreeMap, BinaryHeap};
 use sas_plus::{Task, Value};
 use symbolic_search::backend::{Backend, BackendResult};
 
 use super::bdd_leaf::{Encoding, meets, minus};
-use super::{Leaf, Pricing, Set, SymbolicTask, widen};
+use super::{Leaf, Pricing, Set, SymbolicTask, holds, widen};
 use crate::decoupled::Price;
 use crate::search::{Order, with_true_cost};
 use crate::{Config, DecoupledHeuristic, Outcome, Pruning, Statistics};
@@ -83,6 +83,7 @@ pub(super) fn search(
         heuristic,
         greedy: order == Order::Greedy,
         nodes: Vec::new(),
+        by_g: BTreeMap::new(),
         open: BinaryHeap::new(),
         best: None,
         statistics: Statistics::default(),
@@ -137,7 +138,7 @@ impl<'t> Center<'t> {
         for leaf in &task.leaves {
             let pres: Vec<Vec<(usize, Value)>> = match leaf {
                 Leaf::Symbolic(l) => l.conditions().map(<[_]>::to_vec).collect(),
-                Leaf::Explicit(l) => l.moves.iter().map(|m| m.center_pre.clone()).collect(),
+                Leaf::Explicit(l) => l.center_pres.clone(),
             };
             for pre in pres {
                 if !pre.is_empty() && conditions.iter().all(|(p, _)| *p != pre) {
@@ -202,6 +203,10 @@ struct Grouped<'t> {
     greedy: bool,
     /// Every stored node.
     nodes: Vec<Node>,
+    /// Node ids by `g`, each list ascending: dominance under cost-optimal
+    /// search only looks at nodes with no higher `g`, merging only at the
+    /// same `g`.
+    by_g: BTreeMap<Price, Vec<usize>>,
     /// `(key, node)`; stale entries are skipped.
     open: BinaryHeap<Reverse<(Price, usize)>>,
     /// Cheapest solution so far and its node.
@@ -223,7 +228,7 @@ impl Grouped<'_> {
             .map(|l| task.initial_seeds(l))
             .collect();
         let initial = &task.initial_center;
-        let leaves = task.closed(&seeds, &|pre| pre.iter().all(|&(s, v)| initial[s] == v))?;
+        let leaves = task.closed(&seeds, &|pre| holds(pre, initial))?;
         self.insert(center, leaves, 0, None)?;
 
         while let Some(Reverse((key, id))) = self.open.pop() {
@@ -284,9 +289,18 @@ impl Grouped<'_> {
 
     /// The center states of `center` that no stored node dominates at `g`
     /// with `leaves`.
+    ///
+    /// shortcut: scans every stored node with no higher `g` (every node in
+    /// greedy search), one BDD `and` each; index by center cubes if stores
+    /// get long.
     fn undominated(&self, mut center: Set, leaves: &[Pricing], g: Price) -> BackendResult<Set> {
         let bdd = &self.task.bdd;
-        for node in &self.nodes {
+        // Greedy dominance ignores `g`, so it looks at every node.
+        let all = self.greedy.then_some(0..self.nodes.len());
+        let no_higher_g = (!self.greedy).then(|| self.by_g.range(..=g).flat_map(|(_, ids)| ids));
+        let candidates =
+            (all.into_iter().flatten()).chain(no_higher_g.into_iter().flatten().copied());
+        for node in candidates.map(|id| &self.nodes[id]) {
             if !meets(bdd, &node.center, &center)? {
                 continue;
             }
@@ -356,9 +370,13 @@ impl Grouped<'_> {
 
         let source = |c: &Set| parent.map(|(p, a)| (p, a, c.clone()));
         let after = parent.map_or(0, |(p, _)| p + 1);
-        let matching = (after..self.nodes.len()).find(|&u| {
-            !self.nodes[u].expanded && self.nodes[u].g == g && self.nodes[u].leaves == leaves
-        });
+        let matching = self
+            .by_g
+            .get(&g)
+            .into_iter()
+            .flatten()
+            .copied()
+            .find(|&u| u >= after && !self.nodes[u].expanded && self.nodes[u].leaves == leaves);
         if let Some(u) = matching {
             let merged = bdd.or(&self.nodes[u].center, &center)?;
             let Some(h) = self.estimate(&merged, &leaves)? else {
@@ -381,6 +399,7 @@ impl Grouped<'_> {
         };
         let key = if self.greedy { h } else { g.saturating_add(h) };
         let id = self.nodes.len();
+        self.by_g.entry(g).or_default().push(id);
         self.nodes.push(Node {
             sources: source(&center).into_iter().collect(),
             center,

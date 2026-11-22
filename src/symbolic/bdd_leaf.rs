@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 use sas_plus::{OpId, Value};
 use symbolic_search::backend::{Backend, BackendResult, Oxidd, OxiddRenaming, OxiddVarSet};
 
-use super::{Active, Set};
+use super::{Active, Set, holds};
 use crate::decoupled::Price;
 
 /// The pricing function of one leaf: `(price, leaf states)`, ascending in
@@ -495,7 +495,7 @@ impl SymLeaf {
                     .expect("the path applied this action"),
             };
             let center = &centers[stage];
-            let active = |pre: &[(usize, Value)]| pre.iter().all(|&(s, v)| center[s] == v);
+            let active = |pre: &[(usize, Value)]| holds(pre, center);
             let (ops, seed, price) = self.walk(bdd, costs, &seeds, &active, target)?;
             stages[stage] = ops;
             target = seed;

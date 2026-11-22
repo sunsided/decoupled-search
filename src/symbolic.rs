@@ -19,7 +19,7 @@ use core::cmp::Reverse;
 use sas_plus::{Fact, OpId, Operator, Task, Value, VarId};
 use symbolic_search::backend::{Backend, BackendResult, Capacity, OutOfMemory, Oxidd, OxiddSet};
 
-use crate::decoupled::{Price, UNREACHED};
+use crate::decoupled::{LeafPart, Price, UNREACHED};
 use crate::heuristic::fact_offsets;
 use crate::search::{Order, with_true_cost};
 use crate::{
@@ -27,7 +27,7 @@ use crate::{
     Plan, Pruning, Statistics,
 };
 use bdd_leaf::{Encoding, Layers, LeafMove, SymLeaf};
-use explicit::{ExplicitLeaf, LocalFacts, Move};
+use explicit::{ExplicitLeaf, LocalFacts};
 
 /// A set of states of one factor.
 type Set = OxiddSet;
@@ -60,8 +60,8 @@ enum Pricing {
 enum Part {
     /// Its relation.
     Symbolic(Set),
-    /// Its successor table.
-    Explicit(Vec<Option<usize>>),
+    /// Its preconditions and effects on the leaf.
+    Explicit(LeafPart),
 }
 
 /// A global action: an operator that is not a leaf action.
@@ -145,7 +145,28 @@ pub(crate) fn run(
         return Err(Error::ReachabilityNotOptimal);
     }
 
-    let mut nodes = initial_nodes(task);
+    let tables = (initial_nodes(task), NODES.1);
+    run_with_tables(config, task, factoring, heuristics, order, tables)
+}
+
+/// [`run`] without the checks, starting with a node table of `tables.0`
+/// nodes and growing it fourfold on every overflow, up to `tables.1`.
+///
+/// # Errors
+///
+/// As [`run`]; [`Error::OutOfNodes`] once a table of `tables.1` nodes
+/// overflows.
+fn run_with_tables(
+    config: &Config,
+    task: &Task,
+    factoring: &Factoring,
+    heuristics: (
+        Option<&dyn DecoupledHeuristic>,
+        Option<&dyn DecoupledHeuristic>,
+    ),
+    order: Order,
+    (mut nodes, max_nodes): (usize, usize),
+) -> Result<Outcome, Error> {
     loop {
         let capacity = Capacity {
             nodes,
@@ -161,7 +182,7 @@ pub(crate) fn run(
         match attempt {
             Ok(outcome) => return Ok(outcome),
             Err(Retry::Error(e)) => return Err(e),
-            Err(Retry::OutOfMemory) if nodes < NODES.1 => nodes *= 4,
+            Err(Retry::OutOfMemory) if nodes < max_nodes => nodes = (nodes * 4).min(max_nodes),
             Err(Retry::OutOfMemory) => return Err(Error::OutOfNodes),
         }
     }
@@ -283,7 +304,7 @@ impl SymbolicTask {
                 let encoding = Encoding::new(&bdd, &widths(vars), &mut next_var)?;
                 Leaf::Symbolic(SymLeaf::new(&bdd, encoding, &domains, &initial, &goal)?)
             } else {
-                Leaf::Explicit(ExplicitLeaf::new(domains, &initial, &goal))
+                Leaf::Explicit(ExplicitLeaf::new(vars.clone(), domains, &initial, &goal))
             });
         }
         let center_encoding = config
@@ -336,11 +357,7 @@ impl SymbolicTask {
     fn initial_seeds(&self, leaf: usize) -> Pricing {
         match &self.leaves[leaf] {
             Leaf::Symbolic(l) => Pricing::Symbolic(vec![(0, l.initial.clone())]),
-            Leaf::Explicit(l) => {
-                let mut prices = vec![UNREACHED; l.size];
-                prices[l.initial] = 0;
-                Pricing::Explicit(prices)
-            }
+            Leaf::Explicit(l) => Pricing::Explicit(l.leaf.initial_prices()),
         }
     }
 
@@ -393,7 +410,7 @@ impl SymbolicTask {
     fn leaf_goal_price(&self, leaf: usize, pricing: &Pricing) -> BackendResult<Option<Price>> {
         Ok(match (&self.leaves[leaf], pricing) {
             (Leaf::Symbolic(l), Pricing::Symbolic(p)) => SymLeaf::min_price(&self.bdd, p, &l.goal)?,
-            (Leaf::Explicit(l), Pricing::Explicit(p)) => ExplicitLeaf::min_price(p, |x| l.goal[x]),
+            (Leaf::Explicit(l), Pricing::Explicit(p)) => l.goal_price(p),
             _ => unreachable!("a pricing matches its leaf"),
         })
     }
@@ -430,15 +447,20 @@ impl SymbolicTask {
                         (Leaf::Symbolic(l), Pricing::Symbolic(p)) => {
                             SymLeaf::min_price(&self.bdd, p, &l.facts[slot][value])?
                         }
-                        (Leaf::Explicit(l), Pricing::Explicit(p)) => {
-                            ExplicitLeaf::min_price(p, |x| l.satisfies(x, &[(slot, value)]))
-                        }
+                        // Lowered below, in one pass over the reached states.
+                        (Leaf::Explicit(_), Pricing::Explicit(_)) => None,
                         _ => unreachable!("a pricing matches its leaf"),
                     },
                 };
                 if let Some(p) = price {
                     prices[base + value] = p;
                 }
+            }
+        }
+
+        for (leaf, pricing) in self.leaves.iter().zip(leaves) {
+            if let (Leaf::Explicit(l), Pricing::Explicit(p)) = (leaf, pricing) {
+                l.lower_fact_prices(p, &self.fact_offsets, &mut prices);
             }
         }
 
@@ -459,6 +481,11 @@ impl SymbolicTask {
         greedy: bool,
         fold_g: bool,
     ) -> BackendResult<bool> {
+        // Without `fold_g`, the result below is `g_t <= g_n`: skip the slacks.
+        if !greedy && !fold_g && g_t > g_n {
+            return Ok(false);
+        }
+
         let mut budget: i128 = 0;
         for (new, stored) in n.iter().zip(t) {
             let delta = match (stored, new) {
@@ -506,9 +533,9 @@ impl SymbolicTask {
                     leaf.cheapest_goal_cost(&self.bdd, &free)?
                 }
                 Leaf::Explicit(leaf) => {
-                    let free: Vec<&[Option<usize>]> = parts
+                    let free: Vec<&LeafPart> = parts
                         .map(|p| match p {
-                            Part::Explicit(t) => t.as_slice(),
+                            Part::Explicit(t) => t,
                             Part::Symbolic(_) => unreachable!("parts match their leaf"),
                         })
                         .collect();
@@ -597,7 +624,7 @@ impl SymbolicTask {
         };
         let table = |stage: usize| {
             part(stage).map(|p| match p {
-                Part::Explicit(t) => t.as_slice(),
+                Part::Explicit(t) => t,
                 Part::Symbolic(_) => unreachable!("parts match their leaf"),
             })
         };
@@ -607,9 +634,7 @@ impl SymbolicTask {
         let mut stages = vec![Vec::new(); centers.len()];
         for stage in (0..centers.len()).rev() {
             let seeds = if stage == 0 {
-                let mut s = vec![UNREACHED; l.size];
-                s[l.initial] = 0;
-                s
+                l.leaf.initial_prices()
             } else {
                 match table(stage) {
                     None => dense(stage - 1).to_vec(),
@@ -619,11 +644,11 @@ impl SymbolicTask {
                 }
             };
             let center = &centers[stage];
-            let active = |pre: &[(usize, Value)]| pre.iter().all(|&(s, v)| center[s] == v);
-            let (_, parents) = l.close(&seeds, &active, self.costs);
+            let active = |pre: &[(usize, Value)]| holds(pre, center);
+            let (_, steps) = l.close(&seeds, &active, self.costs);
             let mut rank = target;
-            while let Some((from, index)) = parents[rank] {
-                stages[stage].push(l.moves[index].op);
+            while let Some((from, op)) = steps[rank] {
+                stages[stage].push(op);
                 rank = from;
             }
             stages[stage].reverse();
@@ -699,15 +724,7 @@ fn add_move(
                 relation,
             });
         }
-        Leaf::Explicit(l) => {
-            let next = l.table(facts);
-            l.moves.push(Move {
-                op,
-                cost,
-                center_pre,
-                next,
-            });
-        }
+        Leaf::Explicit(l) => l.add_action(op, cost, center_pre, facts),
     }
 
     Ok(())
@@ -762,7 +779,7 @@ fn classify(
         let facts = local(l);
         parts.push(Some(match leaf {
             Leaf::Symbolic(s) => Part::Symbolic(s.encoding.relation(bdd, &facts.pre, &facts.eff)?),
-            Leaf::Explicit(e) => Part::Explicit(e.table(&facts)),
+            Leaf::Explicit(_) => Part::Explicit(facts.part()),
         }));
     }
 
@@ -1071,5 +1088,63 @@ impl Search<'_> {
 
         path.reverse();
         path
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::format;
+    use alloc::vec;
+
+    use sas_plus::{Effect, Fact, Operator, State, Variable};
+
+    use super::*;
+
+    /// One leaf of `n` binary variables, each set by its own operator at
+    /// cost 1; the goal sets all of them.
+    fn bits(n: usize) -> (Task, Factoring) {
+        let task = Task {
+            variables: (0..n).map(|i| Variable::new(format!("b{i}"), 2)).collect(),
+            operators: (0..n)
+                .map(|i| Operator {
+                    name: format!("set{i}"),
+                    pre: vec![],
+                    eff: vec![Effect::new(Fact::new(i, 1))],
+                    cost: 1,
+                })
+                .collect(),
+            initial: State(vec![0; n]),
+            goal: (0..n).map(|i| Fact::new(i, 1)).collect(),
+            axioms: vec![],
+        };
+        let factoring = Factoring::new(&task, vec![(0..n).collect()]).expect("valid");
+        (task, factoring)
+    }
+
+    /// A node table too small for the task grows until the search fits,
+    /// and stops with [`Error::OutOfNodes`] at the largest one.
+    #[test]
+    fn node_tables_grow_up_to_the_largest() {
+        let (task, factoring) = bits(12);
+        let config = Config {
+            pruning: Pruning::Basic,
+            symbolic_leaves: true,
+            symbolic_min_states: 0,
+            ..Config::default()
+        };
+        let run = |tables| {
+            run_with_tables(
+                &config,
+                &task,
+                &factoring,
+                (None, None),
+                Order::Cost,
+                tables,
+            )
+        };
+
+        assert_eq!(run((16, 16)).map(|_| ()), Err(Error::OutOfNodes));
+        let outcome = run((16, NODES.1)).expect("fits a larger table");
+        assert_eq!(outcome.plan.map(|p| p.cost), Some(12));
     }
 }

@@ -525,8 +525,8 @@ with the center path as in the explicit path.
 
 `Config::symbolic_min_states` (default 1024, about where diagrams start to
 pay off on the benchmark below) keeps every leaf with fewer states
-enumerated: dense prices, successor tables per leaf action and global
-part, Dijkstra closure with parent links for reconstruction. Both kinds
+enumerated: dense prices over the explicit search's compiled leaf, with
+its leaf closure, transfers and goal bound (`symbolic/explicit.rs`). Both kinds
 answer the same per-leaf questions (closure, transfer, least price in a
 set, dominance slack), so the search does not tell them apart. A leaf
 above `MAX_LEAF_STATES` that would be enumerated is rejected with
@@ -860,7 +860,7 @@ Invalid tasks are rejected via `Task::validate`.
 
 `Factoring::generalized`
 approximates the paper's integer program greedily. Also open: an index for
-the dominance store, an index for the symbolic center's dominance scan, the fork and inverted-fork refinements of
+the dominance store, an index for the symbolic center's dominance scan (it only buckets by `g`), the fork and inverted-fork refinements of
 decoupled strong stubborn sets, and a nested hierarchy of factors (a decoupled group inside a
 leaf), which generalized factorings do not express (see Factoring strategies, item 7).
 
