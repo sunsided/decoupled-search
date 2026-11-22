@@ -1,13 +1,14 @@
 //! Generalized factorings (Gnad, Torralba and Fišer, ICAPS 2022): leaves
-//! that may interact directly and a center that may be empty. Any partition
-//! is searchable here (operators that are not leaf-only actions are global
-//! actions), so the strategy only has to choose leaves that are mobile.
+//! that may interact directly and a center that may be empty. Operators that
+//! are not leaf-only actions are global actions, so the strategy only has to
+//! choose leaves that are mobile under the search's own classification
+//! (derived variables attached to the leaf they depend on).
 
-use alloc::vec;
 use alloc::vec::Vec;
 
 use sas_plus::{Task, VarId};
 
+use super::star::mobility;
 use super::{Factoring, leaf_states};
 
 impl Factoring {
@@ -21,12 +22,16 @@ impl Factoring {
     /// greedy approximation of that objective. Candidates go smallest first,
     /// then by how few other candidates they overlap, then by how many
     /// operators set exactly that variable set. A leaf is
-    /// *mobile* if some operator sets only its variables and reads only it
-    /// and the center. A candidate is kept if it is disjoint from the leaves
-    /// so far and it and every earlier leaf stay mobile (a new leaf takes its
-    /// variables out of the center, which can strand another leaf), so every
-    /// leaf of the result is mobile. Candidates with a derived variable or
-    /// more than [`crate::MAX_LEAF_STATES`] states are skipped.
+    /// *mobile* if the search would compile some operator as its leaf
+    /// action: the operator sets only the leaf's variables and reads only
+    /// the leaf and the center, with each derived variable counted in the
+    /// leaf it depends on. A candidate is kept if it is disjoint from the
+    /// leaves so far, the search accepts the leaves (no derived variable
+    /// depends on two of them), and it and every earlier leaf stay mobile (a
+    /// new leaf takes its variables out of the center, which can strand
+    /// another leaf), so every leaf of the result is mobile. Candidates with
+    /// a derived variable or more than [`crate::MAX_LEAF_STATES`] states are
+    /// skipped.
     ///
     /// Leaves may read and write each other: those operators become global
     /// actions, which the search branches over (their Theorem 1 shows that
@@ -77,7 +82,7 @@ impl Factoring {
             }
 
             leaves.push(candidate);
-            if !(0..leaves.len()).all(|l| is_mobile(task, &leaves, l)) {
+            if !mobility(task, &leaves).iter().all(|&m| m) {
                 leaves.pop();
             }
         }
@@ -130,25 +135,4 @@ fn candidates(task: &Task) -> Vec<Vec<VarId>> {
         .collect();
     keyed.sort_unstable();
     keyed.into_iter().map(|(.., vars)| vars).collect()
-}
-
-/// Whether leaf `index` of `leaves` is mobile: some operator sets only its
-/// variables and reads only it and the center (the variables in no leaf).
-fn is_mobile(task: &Task, leaves: &[Vec<VarId>], index: usize) -> bool {
-    let mut owner = vec![None; task.num_variables()];
-    for (l, leaf) in leaves.iter().enumerate() {
-        for &v in leaf {
-            owner[v] = Some(l);
-        }
-    }
-
-    task.operators.iter().any(|op| {
-        !op.eff.is_empty()
-            && op.eff.iter().all(|e| owner[e.fact.var] == Some(index))
-            && op
-                .pre
-                .iter()
-                .chain(op.eff.iter().flat_map(|e| &e.conditions))
-                .all(|f| owner[f.var].is_none_or(|l| l == index))
-    })
 }

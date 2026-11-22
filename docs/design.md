@@ -147,7 +147,7 @@ budget instead of a clock (see the table).
 | Sec. 4.1 | all maximum independent sets found within 10 s | up to 16 within a deterministic work budget | deliberate deviation: `no_std`, reproducible |
 | Sec. 4 | abstain below two mobile leaves | `incident_arcs` and `max_leaves` return their best candidate anyway; `auto` abstains (no leaves) | deliberate: the strategy functions return a `Factoring`, not an `Option`; `auto` used to accept a single mobile leaf |
 | Sec. 5 | pick a factoring by 1 s sample searches (LM-cut A\* / GBFS with `h^FF`); a sample that solves the task wins; else expansions (optimal) or heuristic improvement `h(I) / min h` (satisficing), higher better | `auto`: static score (leaf-action share, mobile leaves, largest leaf); opt-in `auto_by_sample(task, objective, expansions)`: samples of A\* with `h^max` or GBFS with `h^FF` under an expansion budget; finished samples win (least work first); optimal: expansions per work unit; satisficing: heuristic improvement, then less work | deliberate deviation: an expansion budget instead of a clock (`no_std`), so the expansion rate is measured in deterministic work units (per generated state, one plus its leaf states), and `h^max` instead of LM-cut; the chosen factoring is returned, not the sample's plan |
-| — | no axioms | the inputs of a derived variable count as adjacent in both strategies, so none is split over two leaves (`Error::AxiomAcrossLeaves`) | extension; regression test `strategies_keep_axiom_inputs_in_one_factor` |
+| — | no axioms | every strategy and `check_star` work on the causal graph with derived variables contracted into their inputs (`factoring/graph.rs`): the inputs of a derived variable are adjacent, so none is split over two leaves (`Error::AxiomAcrossLeaves`), and an operator reading a derived variable reads its inputs, as the search attaches it | extension; regression tests `strategies_keep_axiom_inputs_in_one_factor`, `derived_variables_count_as_their_inputs`, `unread_derived_variables_leave_fork_leaves_alone` |
 | Sec. 2 | causal graph arcs `pre ∪ eff -> eff` | `sas_plus::CausalGraph`, plus effect conditions and axioms | matches (the extra arcs only keep conditional effects and axioms inside one factor) |
 
 ## Decoupled state and pricing
@@ -858,8 +858,7 @@ Invalid tasks are rejected via `Task::validate`.
 
 ## Limitations
 
-`inverted_fork` and `x_shape` may still split the inputs of a derived variable over two
-leaves (the search rejects those factorings and `auto` skips them). `Factoring::generalized`
+`Factoring::generalized`
 approximates the paper's integer program greedily. Also open: an index for
 the dominance store, an index for the symbolic center's dominance scan, the fork and inverted-fork refinements of
 decoupled strong stubborn sets, and a nested hierarchy of factors (a decoupled group inside a

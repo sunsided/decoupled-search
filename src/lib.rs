@@ -141,7 +141,8 @@ pub enum Error {
     FactoringMismatch,
     /// The causal graph has an arc `from -> to` between two different
     /// leaves, so the factoring is not a strict star; see
-    /// [`Factoring::check_star`].
+    /// [`Factoring::check_star`]. Through a derived variable, the arc runs
+    /// from one of its inputs (or joins two of them).
     NotStar {
         /// Source variable of the arc.
         from: VarId,

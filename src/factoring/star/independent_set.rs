@@ -28,10 +28,11 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use sas_plus::{CausalGraph, OpId, Task, VarId};
+use sas_plus::{OpId, Task, VarId};
 
 use super::{Candidate, mobility, neighbours};
 use crate::decoupled::leaf_action_of;
+use crate::factoring::graph::FactorGraph;
 use crate::factoring::leaf_states;
 
 /// The most maximum independent sets that seed a factoring each.
@@ -68,8 +69,8 @@ pub(super) fn factoring(task: &Task) -> Candidate {
 struct Growth<'a> {
     /// The task.
     task: &'a Task,
-    /// Per variable, its neighbours: causal-graph arcs either way, and
-    /// shared derived variables (see [`neighbours`]), sorted.
+    /// Per variable, its neighbours in the [`FactorGraph`] (see
+    /// [`neighbours`]), sorted.
     neighbours: Vec<Vec<VarId>>,
     /// Per variable, the operators that read or write it.
     touching: Vec<Vec<OpId>>,
@@ -96,7 +97,7 @@ impl Leaves {
 impl<'a> Growth<'a> {
     /// The neighbours and touching operators of every variable of `task`.
     fn new(task: &'a Task) -> Self {
-        let neighbours = neighbours(task, &CausalGraph::new(task));
+        let neighbours = neighbours(&FactorGraph::new(task), task.num_variables());
         let mut touching = vec![Vec::new(); task.num_variables()];
         for (op, operator) in task.operators.iter().enumerate() {
             let conditions = operator.eff.iter().flat_map(|e| &e.conditions);

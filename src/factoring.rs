@@ -1,15 +1,22 @@
 //! Center/leaf partitions of a task's variables, and strategies that derive
 //! them from the causal graph.
+//!
+//! Every strategy and [`Factoring::check_star`] read "the causal graph" as
+//! the search sees it: derived variables are replaced by the state
+//! variables they depend on ([`graph::FactorGraph`]). Without axioms that
+//! is the causal graph itself.
 
 mod generalized;
+mod graph;
 mod scoring;
 mod star;
 
 use alloc::vec;
 use alloc::vec::Vec;
 
-use sas_plus::{CausalGraph, Task, VarId};
+use sas_plus::{Task, VarId};
 
+use graph::FactorGraph;
 pub use scoring::{FactoringScore, Objective, Strategy};
 
 use crate::{Error, MAX_LEAF_STATES};
@@ -94,7 +101,7 @@ impl Factoring {
     /// small component becomes one leaf with an empty center.
     #[must_use]
     pub fn fork(task: &Task) -> Self {
-        let graph = CausalGraph::new(task);
+        let graph = FactorGraph::new(task);
         Self::from_components(
             task,
             sink_components(task.num_variables(), |v| graph.successors(v)),
@@ -139,7 +146,7 @@ impl Factoring {
     /// ```
     #[must_use]
     pub fn inverted_fork(task: &Task) -> Self {
-        let graph = CausalGraph::new(task);
+        let graph = FactorGraph::new(task);
         Self::from_components(
             task,
             sink_components(task.num_variables(), |v| graph.predecessors(v)),
@@ -193,7 +200,7 @@ impl Factoring {
     #[must_use]
     pub fn x_shape(task: &Task) -> Self {
         let n = task.num_variables();
-        let graph = CausalGraph::new(task);
+        let graph = FactorGraph::new(task);
         let mut leaves: Vec<Vec<VarId>> = sink_components(n, |v| graph.successors(v))
             .into_iter()
             .filter(|c| leaf_states(task, c).is_some())
@@ -230,7 +237,9 @@ impl Factoring {
 
     /// Checks that the factoring is a strict star: no causal-graph arc
     /// connects variables of two different leaves, so leaves interact only
-    /// through the center.
+    /// through the center. A derived variable counts as the state variables
+    /// it depends on (the search evaluates it with them), and those must lie
+    /// in one factor.
     ///
     /// Search does not require this, since an operator that couples two
     /// leaves becomes a global action. In a star factoring no operator writes
@@ -242,8 +251,9 @@ impl Factoring {
     /// # Errors
     ///
     /// [`Error::NotStar`] with the first offending arc `from -> to` (in
-    /// variable order), and [`Error::FactoringMismatch`] if the factoring was
-    /// built for a task with fewer variables.
+    /// variable order; through a derived variable, `from` is one of its
+    /// inputs), and [`Error::FactoringMismatch`] if the factoring does not
+    /// partition exactly the variables of `task`.
     ///
     /// # Examples
     ///
@@ -271,14 +281,8 @@ impl Factoring {
     /// # Ok::<(), Error>(())
     /// ```
     pub fn check_star(&self, task: &Task) -> Result<(), Error> {
-        let mut leaf_of = vec![None; task.num_variables()];
-        for (leaf, vars) in self.leaves.iter().enumerate() {
-            for &v in vars {
-                *leaf_of.get_mut(v).ok_or(Error::FactoringMismatch)? = Some(leaf);
-            }
-        }
-
-        let graph = CausalGraph::new(task);
+        let leaf_of = self.leaf_of(task)?;
+        let graph = FactorGraph::new(task);
         for from in 0..task.num_variables() {
             let Some(leaf) = leaf_of[from] else {
                 continue;
