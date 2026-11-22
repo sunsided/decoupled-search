@@ -92,7 +92,23 @@ Strategies:
    decoupled search over those matches Dijkstra. `Factoring::auto` now
    returns it on 171 of 200 unstructured random tasks (where star
    strategies rarely find two mobile leaves) and on 2 of 200 random star
-   tasks. The other
+   tasks. On the random tasks where no star strategy finds two mobile
+   leaves, it still finds two or more in most cases, and search over them
+   matches Dijkstra (issue #3's acceptance).
+
+   *Several centers.* A factoring with centers `C_1, ..., C_k`, each with
+   its own leaves, searches like the generalized factoring with center
+   `C_1 ∪ ... ∪ C_k`: global actions are exactly the actions that are not
+   leaf-only, wherever they act, and a leaf-only action may read any center
+   variable, so tying a leaf to one center would only make more actions
+   global. Several centers are therefore covered by generalized factorings
+   (with the union as center, or no center at all). A *nested* hierarchy,
+   where a group of a sub-center and its leaves is itself decoupled inside
+   a leaf of an outer star, is not: its pricing would range over the inner
+   decoupled states, which no published formulation describes. Symbolic
+   leaves cover the practical case of such a group, one large leaf.
+
+   The other
    objectives (mobility, balanced mobility, fact flexibility) and the
    minimum leaf flexibility constraint are not implemented.
 
@@ -846,8 +862,8 @@ Invalid tasks are rejected via `Task::validate`.
 leaves (the search rejects those factorings and `auto` skips them). `Factoring::generalized`
 approximates the paper's integer program greedily. Also open: an index for
 the dominance store, an index for the symbolic center's dominance scan, the fork and inverted-fork refinements of
-decoupled strong stubborn sets, and a hierarchy of factors (several nested centers), which
-generalized factorings do not express.
+decoupled strong stubborn sets, and a nested hierarchy of factors (a decoupled group inside a
+leaf), which generalized factorings do not express (see Factoring strategies, item 7).
 
 ## Cross-crate needs
 

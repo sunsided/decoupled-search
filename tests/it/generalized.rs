@@ -182,3 +182,47 @@ fn non_star_generalized_factorings_match_dijkstra() {
         "only {non_star} non-star generalized factorings"
     );
 }
+
+/// Issue #3's acceptance: on random tasks that have no useful star
+/// factoring (no star strategy finds two mobile leaves), the generalized
+/// factoring still decouples them (two or more mobile leaves), and
+/// decoupled search over it matches Dijkstra with valid plans under every
+/// cross-check configuration.
+#[test]
+fn tasks_without_a_useful_star_factoring_are_decoupled() {
+    let params = RandomTaskParams {
+        num_vars: 5,
+        max_domain: 3,
+        num_ops: 10,
+        ..RandomTaskParams::default()
+    };
+    let mut decoupled = 0;
+    for seed in 0..100 {
+        let task = random_task(seed, params);
+        let star_mobile = Strategy::ALL
+            .into_iter()
+            .filter(|&s| s != Strategy::Generalized)
+            .filter_map(|s| Factoring::with_strategy(&task, s).score(&task).ok())
+            .map(|score| score.mobile_leaves)
+            .max()
+            .unwrap_or(0);
+        if star_mobile >= 2 {
+            continue;
+        }
+
+        let factoring = Factoring::generalized(&task);
+        if factoring.score(&task).is_ok_and(|s| s.mobile_leaves >= 2) {
+            decoupled += 1;
+            assert_eq!(
+                checked_cost(&task, &factoring),
+                optimal_cost(&task),
+                "seed {seed}"
+            );
+        }
+    }
+
+    assert!(
+        decoupled > 10,
+        "only {decoupled} tasks without a star factoring were decoupled"
+    );
+}
