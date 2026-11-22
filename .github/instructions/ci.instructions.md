@@ -25,7 +25,8 @@ applyTo: ".github/workflows/**,Taskfile.dist.yaml,**/Taskfile.dist.yaml,.pre-com
   `deny`, `msrv`, `semver`, `no-std`, `fuzz`, plus `actionlint` and `zizmor` in
   `actions-lint.yml`.
 - `no-std` mirrors `task build:no-std`: the library for `thumbv7em-none-eabihf` with
-  `--no-default-features` and with `--all-features`. Do not drop either build.
+  `--no-default-features` and with `--features merge-and-shrink,lm-cut` (every feature
+  except `symbolic-leaves`, which needs std). Do not drop either build.
 - `msrv` checks the library only (`cargo hack check --rust-version --all-features`, no
   `--all-targets`): dev-dependencies may need a newer Rust. Do not add `--all-targets` back.
 - `fuzz/` is a separate nightly workspace. Its tasks live in `fuzz/Taskfile.dist.yaml`,

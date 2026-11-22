@@ -13,6 +13,8 @@ mod props;
 mod random;
 mod star;
 mod stubborn;
+#[cfg(feature = "symbolic-leaves")]
+mod symbolic;
 mod unsolvable;
 
 use decoupled_search::{Config, DecoupledHeuristic, FactPrices, Factoring, HMax, Plan, Pruning};

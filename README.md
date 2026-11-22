@@ -18,7 +18,8 @@ the search still returns an ordinary sequential plan for the original task.
 
 The crate covers the factoring strategies, cost-optimal (uniform-cost, A*, anytime A*) and satisficing (GBFS)
 search, the dominance pruning of Torralba, Gnad, Dubbert and Hoffmann (2016) and decoupled heuristics, with plan reconstruction and
-an independent plan validator. It is `no_std` with `alloc`, with and without the optional features.
+an independent plan validator. It is `no_std` with `alloc`, with and without the optional features
+except `symbolic-leaves`, which needs `std`.
 
 ## Who this is for
 
@@ -75,6 +76,9 @@ More detail, including how each rule maps to the papers, is in
   completeness under duplicate detection; the combinations with dominance
   pruning and leaf reduction that its proof does not cover are listed in
   the `stubborn_sets` documentation.
+- Optional symbolic leaves (`Config::symbolic_leaves`, feature `symbolic-leaves`): leaf
+  pricing functions as BDDs (Gnad, Torralba and Hoffmann, SoCS 2017), for leaves too large
+  to enumerate. Same state space and results as explicit leaves, under basic dominance.
 - Reachability-only leaves (no prices) for GBFS.
 - Conditional effects on a leaf conditioned on the center and that leaf,
   on the center conditioned on the center; derived variables that depend on
@@ -133,7 +137,10 @@ println!("{:?}", outcome.statistics);
 - `lm-cut`: `LmCutHeuristic`, an admissible LM-cut heuristic on decoupled states, from
   [planning-heuristics](https://crates.io/crates/planning-heuristics).
 
-The crate is `no_std` with `alloc`, with and without the features.
+- `symbolic-leaves`: `Config::symbolic_leaves`, leaf pricing functions as BDDs, from
+  [symbolic-search](https://crates.io/crates/symbolic-search). Needs `std`.
+
+The crate is `no_std` with `alloc`, with and without the features, except `symbolic-leaves`.
 
 ## License
 

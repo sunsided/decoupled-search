@@ -37,7 +37,7 @@ needs before it can be merged.
 | `task ci` | Everything CI runs except the coverage upload and the semver check (`task coverage`, `task semver`). Run it before you open a PR |
 | `task bench` | Benchmarks |
 | `task test:prop` | Property tests with 10000 cases (`PROPTEST_CASES`) |
-| `task build:no-std` | Build the library for `thumbv7em-none-eabihf`, without features and with every feature |
+| `task build:no-std` | Build the library for `thumbv7em-none-eabihf`, without features and with every feature except `symbolic-leaves` |
 | `task fuzz:smoke` | Run every fuzz target briefly (needs nightly) |
 | `task clean` | Remove build output (fuzz corpora and crash artifacts are kept) |
 

@@ -24,8 +24,7 @@ use crate::{Error, MAX_LEAF_STATES};
 pub struct Factoring {
     /// Center variables, sorted ascending.
     center: Vec<VarId>,
-    /// Leaf variables, each leaf non-empty and with at most
-    /// [`MAX_LEAF_STATES`] states. No variable appears twice.
+    /// Leaf variables, each leaf non-empty. No variable appears twice.
     leaves: Vec<Vec<VarId>>,
 }
 
@@ -38,8 +37,11 @@ impl Factoring {
     /// - [`Error::DuplicateVariable`] if a variable appears twice.
     /// - [`Error::DerivedInLeaf`] if a leaf names a derived variable.
     /// - [`Error::EmptyLeaf`] if a leaf has no variables.
-    /// - [`Error::LeafTooLarge`] if a leaf has more than [`MAX_LEAF_STATES`]
-    ///   states.
+    ///
+    /// Leaves of any size are accepted; searching with explicit leaves
+    /// rejects one with more than [`MAX_LEAF_STATES`] states
+    /// ([`Error::LeafTooLarge`]), symbolic leaves
+    /// ([`crate::Config::symbolic_leaves`]) do not.
     pub fn new(task: &Task, leaves: Vec<Vec<VarId>>) -> Result<Self, Error> {
         let mut in_leaf = vec![false; task.num_variables()];
         for (index, leaf) in leaves.iter().enumerate() {
@@ -58,10 +60,6 @@ impl Factoring {
                 }
 
                 *seen = true;
-            }
-
-            if leaf_states(task, leaf).is_none() {
-                return Err(Error::LeafTooLarge { leaf: index });
             }
         }
 

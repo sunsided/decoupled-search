@@ -30,7 +30,9 @@
 //! uniform-cost, A*, anytime A* and greedy search with basic, frontier,
 //! effective-price, simulation and adaptive dominance pruning and
 //! simulation-based leaf reduction; decoupled strong stubborn sets
-//! (Gnad, Hoffmann and Wehrle, JAIR 2019); reachability-only
+//! (Gnad, Hoffmann and Wehrle, JAIR 2019); symbolic leaves behind the
+//! `symbolic-leaves` feature (Gnad, Torralba and Hoffmann 2017);
+//! reachability-only
 //! leaves for greedy search; `h^max` and `h^FF` on decoupled states, a
 //! merge-and-shrink adapter behind the `merge-and-shrink` feature, and an
 //! LM-cut adapter behind the `lm-cut` feature.
@@ -49,6 +51,8 @@ mod factoring;
 mod heuristic;
 mod plan;
 mod search;
+#[cfg(feature = "symbolic-leaves")]
+mod symbolic;
 
 use core::fmt;
 
@@ -126,7 +130,8 @@ pub enum Error {
         /// Index of the offending leaf.
         leaf: usize,
     },
-    /// Leaf `leaf` has more than [`MAX_LEAF_STATES`] states.
+    /// Leaf `leaf` has more than [`MAX_LEAF_STATES`] states, too many to
+    /// enumerate as explicit leaves.
     LeafTooLarge {
         /// Index of the offending leaf.
         leaf: usize,
@@ -143,6 +148,14 @@ pub enum Error {
         /// Target variable of the arc.
         to: VarId,
     },
+    /// [`Config::symbolic_leaves`] was combined with `option`, which
+    /// symbolic leaves do not support.
+    SymbolicUnsupported {
+        /// What is not supported.
+        option: &'static str,
+    },
+    /// Symbolic leaves ran out of nodes in the largest BDD node table.
+    OutOfNodes,
 }
 
 impl fmt::Display for Error {
@@ -177,6 +190,10 @@ impl fmt::Display for Error {
             Self::NotStar { from, to } => {
                 write!(f, "causal-graph arc {from} -> {to} connects two leaves")
             }
+            Self::SymbolicUnsupported { option } => {
+                write!(f, "symbolic leaves do not support {option}")
+            }
+            Self::OutOfNodes => write!(f, "symbolic leaves ran out of BDD nodes"),
         }
     }
 }

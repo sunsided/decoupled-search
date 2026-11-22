@@ -123,6 +123,71 @@ fn bench_lm_cut(criterion: &mut Criterion) {
     });
 }
 
+/// A center switch and one leaf of `n` binary variables that the switch
+/// lets the plan set one by one: `2^n` leaf states.
+#[cfg(feature = "symbolic-leaves")]
+fn bits(n: usize) -> Task {
+    use sas_plus::{Effect, Fact, Operator, State, Variable};
+
+    let mut operators = vec![Operator {
+        name: "switch".into(),
+        pre: vec![Fact::new(0, 0)],
+        eff: vec![Effect::new(Fact::new(0, 1))],
+        cost: 1,
+    }];
+    for i in 1..=n {
+        operators.push(Operator {
+            name: format!("set{i}"),
+            pre: vec![Fact::new(0, 1), Fact::new(i, 0)],
+            eff: vec![Effect::new(Fact::new(i, 1))],
+            cost: 2,
+        });
+    }
+    Task {
+        variables: (0..=n).map(|i| Variable::new(format!("v{i}"), 2)).collect(),
+        operators,
+        initial: State(vec![0; n + 1]),
+        goal: (1..=n).map(|i| Fact::new(i, 1)).collect(),
+        axioms: vec![],
+    }
+}
+
+/// Times uniform-cost search with explicit and with symbolic leaves under
+/// basic dominance: on the gripper fork, where every leaf is tiny, and on
+/// one leaf of growing size, where explicit leaves stop at
+/// `MAX_LEAF_STATES`.
+#[cfg(feature = "symbolic-leaves")]
+fn bench_symbolic(criterion: &mut Criterion) {
+    let explicit = Config {
+        pruning: Pruning::Basic,
+        ..Config::default()
+    };
+    let symbolic = Config {
+        symbolic_leaves: true,
+        ..explicit
+    };
+
+    let task = gripper();
+    let factoring = Factoring::fork(&task);
+    // The explicit counterpart is `uniform-basic/fork` in `bench_pruning`.
+    criterion.bench_function("uniform-basic-symbolic/fork", |b| {
+        b.iter(|| symbolic.search(black_box(&task), &factoring));
+    });
+
+    for n in [8, 12, 16, 24] {
+        let task = bits(n);
+        let factoring = Factoring::new(&task, vec![(1..=n).collect()]).expect("valid");
+        if n <= 16 {
+            criterion.bench_function(&format!("uniform-basic/bits-{n}"), |b| {
+                b.iter(|| explicit.search(black_box(&task), &factoring));
+            });
+        }
+        criterion.bench_function(&format!("uniform-basic-symbolic/bits-{n}"), |b| {
+            b.iter(|| symbolic.search(black_box(&task), &factoring));
+        });
+    }
+}
+
 /// Runs every benchmark in this file with criterion's command-line flags.
 fn main() {
     let mut criterion = Criterion::default().configure_from_args();
@@ -133,5 +198,7 @@ fn main() {
     bench_merge_and_shrink(&mut criterion);
     #[cfg(feature = "lm-cut")]
     bench_lm_cut(&mut criterion);
+    #[cfg(feature = "symbolic-leaves")]
+    bench_symbolic(&mut criterion);
     criterion.final_summary();
 }

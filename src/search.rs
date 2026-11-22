@@ -36,7 +36,7 @@ use stubborn::StubbornSets;
 
 /// How the open list is ordered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Order {
+pub(crate) enum Order {
     /// By `g + h`, cost-optimal for admissible `h` (`h = 0` without a
     /// heuristic, which is uniform-cost search).
     Cost,
@@ -253,6 +253,10 @@ pub enum Leaves {
 /// # Ok::<(), decoupled_search::Error>(())
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent on/off options; struct-literal construction is public API"
+)]
 pub struct Config {
     /// The dominance criterion. Default: [`Pruning::Adaptive`].
     pub pruning: Pruning,
@@ -352,6 +356,20 @@ pub struct Config {
     ///   [`Config::reduce_leaves`] rest on the randomized cross-checks
     ///   against Dijkstra only.
     pub stubborn_sets: bool,
+    /// Whether to keep every leaf's pricing function as binary decision
+    /// diagrams, one per price, instead of a price per enumerated leaf state
+    /// (Gnad, Torralba and Hoffmann 2017). Needs the `symbolic-leaves`
+    /// feature. Default: `false`.
+    ///
+    /// The decoupled state space is the same as with explicit leaves, so
+    /// costs, plans and the number of expanded states agree; leaves larger
+    /// than [`crate::MAX_LEAF_STATES`] become searchable when their reached
+    /// sets have small diagrams. Supports every search and heuristic and
+    /// both [`Leaves`] modes, with [`Pruning::Basic`] (with or without
+    /// [`Config::fold_g`]) only; other criteria, [`Config::reduce_leaves`],
+    /// [`Config::stubborn_sets`], conditional effects and axioms are
+    /// rejected with [`Error::SymbolicUnsupported`].
+    pub symbolic_leaves: bool,
 }
 
 impl Default for Config {
@@ -363,6 +381,7 @@ impl Default for Config {
             max_analysis_states: 256,
             reduce_leaves: false,
             stubborn_sets: false,
+            symbolic_leaves: false,
         }
     }
 }
@@ -747,6 +766,16 @@ impl Config {
         order: Order,
         limit: Option<u64>,
     ) -> Result<(Outcome, Probe), Error> {
+        if self.symbolic_leaves {
+            #[cfg(feature = "symbolic-leaves")]
+            return crate::symbolic::run(self, task, factoring, (heuristic, root), order)
+                .map(|outcome| (outcome, Probe::default()));
+            #[cfg(not(feature = "symbolic-leaves"))]
+            return Err(Error::SymbolicUnsupported {
+                option: "symbolic leaves without the symbolic-leaves feature",
+            });
+        }
+
         let mut decoupled = DecoupledTask::new(task, factoring)?;
         if self.leaves == Leaves::Reachability {
             if order != Order::Greedy {
@@ -1008,7 +1037,7 @@ fn reduce_leaves(task: &mut DecoupledTask, dominance: &Dominance, statistics: &m
 /// `plan` with its cost summed from its operators. Without leaf costs in
 /// the search this is the only correct cost; otherwise it equals the search
 /// cost, which a debug assertion checks.
-fn with_true_cost(task: &Task, mut plan: Plan, reachability_only: bool) -> Plan {
+pub(crate) fn with_true_cost(task: &Task, mut plan: Plan, reachability_only: bool) -> Plan {
     let summed = plan
         .ops
         .iter()

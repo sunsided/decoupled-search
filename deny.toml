@@ -5,7 +5,10 @@ all-features = true
 
 [advisories]
 # Advisories (vulnerable, unmaintained, yanked) fail by default; ignore entries need a reason.
-ignore = []
+ignore = [
+  # Build-time only: oxidd-derive, a proc macro of oxidd (symbolic-leaves feature), uses it.
+  { id = "RUSTSEC-2024-0370", reason = "proc-macro-error is pulled in by oxidd-derive only; no maintained oxidd release avoids it" },
+]
 
 [licenses]
 # Permissive licenses plus the weak-copyleft ones (EUPL, MPL) used by sibling projects.

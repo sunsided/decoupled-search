@@ -217,7 +217,8 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # Mirrors `task build:no-std`: without features, then with every feature.
       - run: cargo build --lib --target thumbv7em-none-eabihf --no-default-features
-      - run: cargo build --lib --target thumbv7em-none-eabihf --all-features
+      # symbolic-leaves needs std (its BDD backend).
+      - run: cargo build --lib --target thumbv7em-none-eabihf --features merge-and-shrink,lm-cut
 
   fuzz:
     name: fuzz targets build

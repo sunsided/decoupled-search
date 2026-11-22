@@ -93,10 +93,8 @@ fn malformed_factorings_are_rejected() {
 
     let mut big = tiny();
     big.variables[0].domain_size = u32::try_from(MAX_LEAF_STATES).expect("fits");
-    assert_eq!(
-        Factoring::new(&big, vec![vec![0, 1]]),
-        Err(Error::LeafTooLarge { leaf: 0 })
-    );
+    let large = Factoring::new(&big, vec![vec![0, 1]]).expect("any leaf size is valid");
+    assert_eq!(search(&big, &large), Err(Error::LeafTooLarge { leaf: 0 }));
 
     let mut wider = tiny();
     wider.variables.push(Variable::new("c", 2));

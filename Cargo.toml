@@ -3,7 +3,7 @@ name = "decoupled-search"
 description = "Decoupled (star-topology) search for factored SAS+ planning: star factorings, cost-optimal and greedy search, dominance pruning and decoupled heuristics"
 version = "0.2.0"
 edition = "2024"
-rust-version = "1.86"
+rust-version = "1.91"
 authors = ["Markus Mayer <widemeadows@gmail.com>"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/sunsided/decoupled-search"
@@ -33,12 +33,16 @@ sas-plus = { version = "0.2.1", default-features = false }
 merge-and-shrink = { version = "0.3.0", optional = true }
 # LmCut (see docs/design.md).
 planning-heuristics = { version = "0.2", optional = true }
+# BDDs for symbolic leaves; needs std and sets the MSRV.
+symbolic-search = { version = "0.1", optional = true }
 
 [features]
 ## A merge-and-shrink heuristic on decoupled states (`MasHeuristic`).
 merge-and-shrink = ["dep:merge-and-shrink"]
 ## The landmark-cut heuristic on decoupled states (`LmCutHeuristic`).
 lm-cut = ["dep:planning-heuristics"]
+## Leaf pricing functions as BDDs (`Config::symbolic_leaves`). Needs `std`.
+symbolic-leaves = ["dep:symbolic-search"]
 
 [dev-dependencies]
 criterion = "0.8.2"

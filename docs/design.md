@@ -98,7 +98,7 @@ budget instead of a clock (see the table).
 | --- | --- | --- | --- |
 | Sec. 3.3, fn. 1 | refined fork / inverted fork: leaves are the sink / source causal-graph SCCs | `fork`, `inverted_fork`, components over `2^16` states join the center | matches (leaf bound: see below) |
 | Sec. 3.3 (and Gnad, Hoffmann and Domshlak 2015) | X-shape: fork strategy, then inverted fork on the fork center; inverted-fork leaves with an arc into a fork leaf go back to the center | `x_shape`, on the refined fork and inverted fork | matches, with the refined (maximum-leaves) fork of footnote 1 instead of the 2015 greedy horizontal line |
-| Sec. 4 | leaf-size bound `2^32` states | `MAX_LEAF_STATES = 2^16` | deliberate deviation: leaf states are `u16` ranks |
+| Sec. 4 | leaf-size bound `2^32` states | `MAX_LEAF_STATES = 2^16` for explicit leaves, none for symbolic ones | deliberate deviation: explicit leaf states are `u16` ranks |
 | Sec. 4.1 | mobile: flexibility (leaf-only actions over all actions affecting the leaf) above 0; frozen otherwise | at least one leaf action (`score`, and a cheap count the strategies use, asserted equal) | matches |
 | Fig. 2 | incident arcs: static order on the full causal graph, one candidate per center size 1 to the number of variables, max mobile leaves | same; ties: smaller variable, then smaller center | bug fixed: the order was recomputed per step from neighbours outside the center (distinct neighbours, not arcs), and the first candidate with two leaves (mobile or not) was taken; regression test `incident_arcs_keeps_the_most_mobile_leaves` |
 | Fig. 1 | MIS seed, `maximizeFlexibility`, drop frozen, `maximizeFlexibility` | `max_leaves`, as listed above | bug fixed: `max_leaves` was the incident-arcs walk with the most (not mobile) leaves, with no independent set and no growing; regression test `max_leaves_grows_the_independent_set` |
@@ -425,9 +425,103 @@ never needed there either.
 - `Statistics::stubborn_pruned` counts the applicable global actions the
   sets leave out.
 
-## Symbolic leaves (proposed)
+## Symbolic leaves
 
-*Status: design for review; nothing below is implemented.*
+Gnad, Torralba and Hoffmann (SoCS 2017) keep each leaf's pricing
+function as binary decision diagrams instead of an explicit price per leaf
+state. The decoupled state space does not change: the same center paths,
+the same prices, the same plans. Only the representation does, so leaves
+far larger than `MAX_LEAF_STATES` become usable when their reachable sets
+have small diagrams. The paper does not expand sets of decoupled states
+at once (a symbolic center); that part of issue #1 stays open.
+
+### Representation
+
+- *Encoding.* Each leaf variable gets `ceil(log2 |D(v)|)` bits; current
+  and next bits are interleaved per leaf, in leaf variable order. Each
+  leaf has its own BDD manager, so leaves never share variables.
+- *Transition relations.* One relation per leaf action projected onto its
+  leaf, grouped by (cost, center precondition), and one per global part on
+  the leaf (cost 0 in the leaf; the action's cost is in `g`).
+- *Pricing function.* Per leaf, a list of layers `(price, depth, set)`,
+  ascending in `(price, depth)`, pairwise disjoint, every leaf state at its
+  cheapest price. `depth` counts the 0-cost image steps inside a price, so
+  reconstruction can always step back to a strictly smaller key. The
+  reached set is the union of the layers.
+
+### Operations
+
+The explicit path's operations, each with its symbolic form:
+
+| Explicit | Symbolic |
+| --- | --- |
+| closure (`View::close`) | symbolic Dijkstra per leaf from the current layers, over the relations whose center precondition holds; 0-cost relations iterate to a fixpoint within a price, each round a new `depth` |
+| transfer across a global action | per layer: intersect with the part's precondition, image through its relation, then subtract all cheaper layers to restore disjointness |
+| applicability (reached precondition) | some layer intersects the precondition BDD |
+| goal price | least price whose layer intersects the leaf goal BDD |
+| `FactPrices` (all heuristics) | per leaf fact, least price whose layer intersects the fact's BDD |
+| dominance, `Pruning::Basic` | same center, `g` no higher, and every layer `(p, S)` of the new state has `S` inside the union of the stored state's layers of price at most `p` |
+| `min_goal_price` (anytime A\*) | symbolic Dijkstra on all leaf relations, center ignored |
+| plan reconstruction | see below |
+
+*Reconstruction (this crate's design; the paper does not describe it).*
+Walk the center path backwards, one leaf at a time, with a single leaf
+state `x` at key `(p, d)` in node `k`, starting from a cheapest goal leaf
+state `pick`ed from the final node. Either some leaf relation of cost `c`
+active under node `k`'s center has a predecessor of `x` in node `k`'s
+layer at `p - c` (at depth `d - 1` if `c = 0`): step back to it and record
+the action; or `x` came in with the transfer, and node `k - 1` has a leaf
+state `y` at price `p` whose global part leads to `x`: continue from `y` in
+node `k - 1`. The key falls strictly in each step, so the walk ends at the
+initial leaf state in the initial node. Leaf actions are then interleaved
+with the center path as in the explicit path.
+
+### Scope
+
+- `Config::symbolic_leaves` (feature `symbolic-leaves`) switches every
+  leaf to the symbolic representation, in `src/symbolic.rs`. Mixed explicit
+  and symbolic leaves (the paper's best configuration) are not implemented.
+- Supported: uniform-cost search, A\*, anytime A\* and GBFS, priced and
+  reachability-only leaves, `Pruning::Basic` with and without `fold_g`
+  (the per-leaf slack is the largest price difference over intersecting
+  layers), and every heuristic, since heuristics read only `FactPrices`;
+  the paper's symbolic LM-cut is not needed because the seeded LM-cut here
+  already works on per-fact prices.
+- Rejected with `Error::SymbolicUnsupported`: the other dominance criteria
+  (they analyse explicit leaf states), `reduce_leaves`, `stubborn_sets`,
+  conditional effects and axioms.
+- `Factoring::new` accepts leaves of any size; the explicit path rejects a
+  leaf above `MAX_LEAF_STATES` when it compiles the task.
+- All leaves share one oxidd manager on disjoint variables. A run that
+  fills the node table restarts with four times the nodes, up to `2^24`,
+  then fails with `Error::OutOfNodes`.
+- The best-first loop is a copy of the explicit one restricted to basic
+  dominance, so that both expand the same states in the same order.
+
+### Checks
+
+- Every random-task cross-check (Dijkstra cost, `Plan::validate`) runs
+  again with `stubborn_sets`, under every `Pruning` with both `fold_g` and
+  under leaf reduction, on tasks that include 0-cost operators,
+  conditional effects and axioms (the last two with full expansion).
+- The paper's examples as oracles: the NoEmpty transport task, and
+  Example 2 (company car), whose optimal cost is 2, not the 100 of the
+  initial goal state.
+- Theorem 5's first family (`M` trucks, each with its own `N`
+  packages): exactly `M + 1` states are stored, as the paper states (7
+  against 729 for `M = 6`, `N = 2`).
+- On 100 random tasks over every test factoring, stubborn sets prune
+  together with dominance in about 100 runs per configuration and store
+  fewer states in total: 2698 against 4117 under the default, 3618
+  against 6261 under `Basic` without `fold_g`, 2587 against 3941 with leaf
+  reduction.
+- GBFS with stubborn sets, with priced and with reachability-only leaves,
+  finds a valid plan exactly on the solvable random tasks.
+- The `search` fuzz target sets `stubborn_sets` from its input.
+- `Statistics::stubborn_pruned` counts the applicable global actions the
+  sets leave out.
+
+## Symbolic leaves
 
 Gnad, Torralba and Hoffmann (SoCS 2017) keep each leaf's pricing
 function as binary decision diagrams instead of an explicit price per leaf
@@ -494,23 +588,27 @@ with the center path as in the explicit path.
 
 ### Checks
 
-- Differential: on every random cross-check task and factoring, symbolic
-  and explicit search under `Basic` without `fold_g` give the same plan
-  cost and the same `expanded`, `generated` and `stored` counts, since the
-  state spaces are identical and successors come in the same order.
-- Size: a task with a leaf above `MAX_LEAF_STATES` (the explicit path
-  returns `LeafTooLarge`) that the symbolic path solves.
-- A benchmark with growing leaves, explicit against symbolic.
+- Differential (`tests/it/symbolic.rs`): on 60 random tasks with 0-cost
+  operators under every test factoring, symbolic and explicit search under
+  `Basic` with and without `fold_g` give the same plan cost (priced leaves)
+  and the same `expanded`, `generated`, `dominated`, `dead_ends`, `stored`
+  and `bound_pruned` counts, for uniform-cost search, A\*, anytime A\* and
+  GBFS with both leaf modes; every plan validates.
+- Size: one leaf of 20 binary variables, which the explicit path rejects
+  with `LeafTooLarge`, is solved with a valid plan.
+- `benches/search.rs` (`bench_symbolic`), uniform-cost search under basic
+  dominance, `--quick` on one machine: the gripper fork (tiny leaves) takes
+  18 µs explicit and 363 µs symbolic; one leaf of `n` binary variables
+  takes 53 µs against 541 µs at `n = 8`, 3.1 ms against 1.1 ms at
+  `n = 12`, 35.5 ms against 2.2 ms at `n = 16`, and 6.8 ms symbolic at
+  `n = 24`, where explicit leaves are rejected. Symbolic leaves pay off
+  once a leaf has a few thousand states.
 
-### Open decisions
+### Dependency
 
-- *BDD library.* `symbolic-search` already wraps oxidd behind its public
-  `backend::Backend` trait, but it needs `std` and Rust 1.91, while this
-  crate is `no_std` at Rust 1.86. As an optional feature it would break the
-  all-features `no_std` and MSRV jobs and the "no_std with and without the
-  features" promise unless those exclude it.
-- *Version.* `Config` gains another public field: the next release after
-  0.2.0 is 0.3.0.
+`symbolic-search` wraps oxidd behind its public `backend::Backend` trait.
+It needs `std` and Rust 1.91, which sets this crate's MSRV; the `no_std`
+build leaves the `symbolic-leaves` feature out.
 
 ## Reachability-only leaves
 
@@ -732,7 +830,8 @@ Invalid tasks are rejected via `Task::validate`.
 
 `inverted_fork` and `x_shape` may still split the inputs of a derived variable over two
 leaves (the search rejects those factorings and `auto` skips them). Also open: an index for
-the dominance store, decoupled symbolic search, the fork and inverted-fork refinements of
+the dominance store, a symbolic center (expanding sets of decoupled states at once), mixed
+explicit and symbolic leaves, the fork and inverted-fork refinements of
 decoupled strong stubborn sets, and multiple centers.
 
 ## Cross-crate needs

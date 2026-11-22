@@ -38,7 +38,7 @@ tasks:
       - task: fuzz:build
 
   build:no-std:
-    desc: Build the library for a bare-metal target (NO_STD_TARGET), without and with every feature
+    desc: Build the library for a bare-metal target (NO_STD_TARGET), without and with every no_std feature
     vars:
       NO_STD_TARGET: '{{.NO_STD_TARGET | default "thumbv7em-none-eabihf"}}'
     preconditions:
@@ -46,8 +46,9 @@ tasks:
         msg: "target missing - rustup target add {{.NO_STD_TARGET}}"
     cmds:
       # The crate is no_std with alloc; the merge-and-shrink and lm-cut adapters must stay so.
+      # symbolic-leaves needs std (its BDD backend), so it is left out here.
       - cargo build --lib --target {{.NO_STD_TARGET}} --no-default-features
-      - cargo build --lib --target {{.NO_STD_TARGET}} --all-features
+      - cargo build --lib --target {{.NO_STD_TARGET}} --features merge-and-shrink,lm-cut
 
   test:
     desc: Run tests (nextest if installed, cargo test otherwise), then doctests
