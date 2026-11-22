@@ -113,6 +113,11 @@ pub(crate) struct Leaf {
     /// `rank * actions.len() + action`; empty if none are. Leaf closure
     /// skips them.
     pub(crate) disabled: Vec<bool>,
+    /// The center slots leaf closure reads (center preconditions of leaf
+    /// actions and center conditions of their effects), sorted; `None` if
+    /// derived variables attached to the leaf read the center too. Filled
+    /// by [`Leaf::index_center_reads`] once the actions are in.
+    pub(crate) center_reads: Option<Vec<usize>>,
 }
 
 impl Leaf {
@@ -141,7 +146,34 @@ impl Leaf {
             goal: Vec::new(),
             actions: Vec::new(),
             disabled: Vec::new(),
+            center_reads: None,
         })
+    }
+
+    /// Records which center slots leaf closure reads, from the leaf
+    /// actions; call after adding the last one.
+    pub(crate) fn index_center_reads(&mut self) {
+        if !self.derived.is_empty() {
+            self.center_reads = None;
+            return;
+        }
+
+        let pre = self.actions.iter().flat_map(|a| &a.center_pre);
+        let cond = (self.actions.iter())
+            .flat_map(|a| &a.part.eff)
+            .flat_map(|e| &e.center_cond);
+        let mut slots: Vec<usize> = pre.chain(cond).map(|f| f.var).collect();
+        slots.sort_unstable();
+        slots.dedup();
+        self.center_reads = Some(slots);
+    }
+
+    /// Whether leaf closure may differ between centers `before` and
+    /// `after`: some slot it reads changed, or it is not indexed.
+    pub(crate) fn sees_change(&self, before: &[Value], after: &[Value]) -> bool {
+        self.center_reads
+            .as_ref()
+            .is_none_or(|slots| slots.iter().any(|&s| before[s] != after[s]))
     }
 
     /// Price vector with only the initial leaf state reached, at price 0.

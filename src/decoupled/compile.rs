@@ -110,6 +110,10 @@ pub(super) fn compile(task: &Task, factoring: &Factoring) -> Result<DecoupledTas
         }
     }
 
+    for leaf in &mut leaves {
+        leaf.index_center_reads();
+    }
+
     let initial = task.initial_state();
     Ok(DecoupledTask {
         initial_center: ownership
