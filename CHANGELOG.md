@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/sunsided/decoupled-search/compare/v0.2.0...v0.3.0) - 2026-11-22
+
+### Changed
+
+- Skip leaf closure where a global action changes nothing the leaf reads
+- Build enumerated symbolic leaves on the compiled leaf
+- Check issue #3's acceptance on tasks without a star factoring
+- Check every heuristic under a symbolic center and non-star factorings
+- Mix enumerated and symbolic leaves, and search with a symbolic center
+- Find generalized factorings with directly interacting leaves
+- Keep leaf pricing functions as BDDs with symbolic leaves
+- Depend on planning-heuristics 0.2
+- Propose symbolic leaf representation in the design notes
+
+### Fixed
+
+- Fix factorings that split derived variables from their inputs
+- Fix h^FF reporting a reachable goal as a dead end on deep tasks
+
+### Removed
+
+- Remove dead code in leaf simulation and the relaxation
+
 ## [0.2.0](https://github.com/sunsided/decoupled-search/compare/v0.1.0...v0.2.0) - 2026-11-22
 
 ### Changed
