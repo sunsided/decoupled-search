@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/sunsided/decoupled-search/compare/v0.1.0...v0.2.0) - 2026-11-22
+
+### Changed
+
+- Measure stubborn set pruning on random tasks and under GBFS
+- Prune decoupled expansions with strong stubborn sets
+- Specify decoupled strong stubborn sets in the design notes
+
 ## [0.1.0](https://github.com/sunsided/decoupled-search/releases/tag/v0.1.0) - 2026-11-22
 
 ### Added

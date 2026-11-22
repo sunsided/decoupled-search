@@ -1,7 +1,7 @@
 [package]
 name = "decoupled-search"
 description = "Decoupled (star-topology) search for factored SAS+ planning: star factorings, cost-optimal and greedy search, dominance pruning and decoupled heuristics"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.86"
 authors = ["Markus Mayer <widemeadows@gmail.com>"]
