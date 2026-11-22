@@ -315,6 +315,108 @@ both; the proofs and the leaf reduction are in the report only):
 | Sec. 6 (report) | superfluous transitions, then unreachable leaf states, then actions without transitions | rule 2 with the removal order above; states stay but are never reached; `Config::reduced_task` drops the actions for heuristics | bug in the literal rule avoided; ours strengthened to match one-at-a-time removal (before, equal-cost and equal-precondition replacements were kept whenever the replacing action had the larger index; regression test `one_directional_replacement_removes_the_dominated_transition`) |
 | Sec. 8 | DA\* and anytime ADA\* | `astar` (DA\*, stopping once the popped key reaches the best solution cost recorded at generation) and `anytime_astar` (ADA\*, see *Goal test and search*) | matches |
 
+## Partial-order reduction
+
+`Config::stubborn_sets` prunes the successors of an expanded decoupled
+state to a *decoupled strong stubborn set* (DSSS) after Gnad, Hoffmann and
+Wehrle (JAIR 2019, Section 4). Off by default. The rules below follow the
+paper's general-star construction (Definitions 4 to 8) with its own cheap
+approximations (Section 7.1); the fork and inverted-fork refinements of its
+Section 5 and the "safety belt" that switches pruning off when it does not
+pay are not implemented.
+
+### Mapping to this crate
+
+| Paper | Here |
+| --- | --- |
+| center action `A^C` (expanded explicitly) | every `GlobalAction`, including globals that touch two or more leaves and no center variable |
+| leaf action `A^L[F^L] \ A^C` (priced, never expanded) | `LeafAction` of leaf `F^L` |
+| leaf path, projection onto `F^L` | the leaf's transition graph with every leaf action and every global part on the leaf, center preconditions ignored; global parts cost 0 (their cost is in `g`) |
+| `p` reached in `s^F` | center satisfies `p`'s center part; per leaf some leaf state of finite price satisfies `p`'s part on that leaf |
+| `prices[s^F]`, `goalprice` | `DecoupledState::prices`, `Prices::cheapest_goal` |
+
+The stubborn set ranges over all operators, leaf actions included; only
+the reached global actions in it are expanded. The proof needs this:
+step (f) of Theorem 1 shows that the first shared action `a_k` is a center
+action because a leaf action could be moved before the pivot, which a
+past-maximal plan rules out. Globals that touch no center variable play
+the paper's center role unchanged: they are on the center path, and
+past-maximality only moves actions confined to one leaf.
+
+### Construction
+
+The set `A` is the least fixed point of the rules below, seeded by rule 1.
+
+1. *Goal.* In a non-goal state: a decoupled necessary enabling set for the
+   goal (Definition 4): if some goal fact on a leaf variable is not reached,
+   all achievers of the first such fact; else, if some leaf's goal part is
+   reached fact by fact but not by one leaf state, all achievers of every
+   goal fact on that leaf; else all achievers of the first center goal fact
+   the center violates. "First" is in variable order. In a goal state
+   (Definition 8): for every leaf with a goal, a goal-price frontier set
+   (Definition 7), approximated as all actions on transitions
+   `x -a-> y` with `x` reached, `price(x) + cost(a) < price(y)`, and
+   `g*(x) + cost(a) + h*(y) < goalprice`, where `g*` and `h*` are leaf
+   distances from the initial leaf state and to the leaf goal on the
+   center-ignoring leaf graph. If no leaf has a frontier transition, `A`
+   is empty and the state is not expanded: its goal price cannot improve.
+2. *Unreached actions.* For every `a` in `A` whose precondition is not
+   reached: a decoupled necessary enabling set for `pre(a)`, as in rule 1.
+3. *Interference.* For every reached `a` in `A`: every `a'` that
+   interferes with `a` (one's effect contradicts the other's precondition,
+   or the effects contradict) and whose precondition is consistent with
+   `pre(a)`.
+4. *Reached leaf preconditions.* For every reached `a` in `A` and every
+   leaf `F^L` it has preconditions on: a reached-enabling set for
+   `pre(a)[F^L]` (Definition 5), approximated as all actions on the leaf
+   graph's transitions out of reached leaf states that violate
+   `pre(a)[F^L]` and can reach a leaf state that satisfies it.
+
+The expanded successors are those of the reached global actions in `A`.
+Corollaries 1 and 2 of the paper make `A` *safe*: it holds the first
+center action of a strongly optimal decoupled plan (up to permutation)
+from every solvable state where the empty plan is not optimal. Uniform-cost
+search, A\* and anytime A\* use rules 1 to 4 in both forms; GBFS stops at
+its first goal state and only meets the non-goal form. With reachability-
+only leaves every reached leaf state has price 0, so the goal form is
+never needed there either.
+
+### Where the paper's guarantee stops
+
+- *Conditional effects and axioms.* The paper is stated for plain FDR
+  tasks; interference and enabling sets are not defined for effect
+  conditions or derived variables. A task with either is searched with
+  full expansion, `stubborn_sets` notwithstanding.
+- *Dominance pruning.* The paper combines DSSS with duplicate detection
+  only. Combining it with a dominance criterion is safe if, whenever `t`
+  is pruned by a stored `n`, `n` can follow `t`'s remaining center path at
+  no higher cost to go: then the witness of `t`'s optimal plan moves to
+  `n`, and the induction on (cost to go, 0-cost center actions left) that
+  proves A\* complete under DSSS carries over. `Basic`, `Frontier` and
+  `EffectivePrices` with `fold_g = false` compare under the same center
+  and keep every leaf path of `t` available to `n`, which should give that
+  property. This is a sketch of this crate's, not a proof from the paper;
+  the cross-checks below test it. `Simulation`, `Adaptive` and
+  `fold_g = true` are covered by the cross-checks only.
+- *Leaf reduction.* `Config::reduce_leaves` removes leaf transitions; the
+  sets are built on the unreduced leaf graph, a superset of what the search
+  uses. Covered by the cross-checks only.
+
+### Checks
+
+- Every random-task cross-check (Dijkstra cost, `Plan::validate`) runs
+  again with `stubborn_sets`, under every `Pruning`, both `fold_g`, and
+  with and without `reduce_leaves`, on tasks that include 0-cost
+  operators.
+- The paper's examples as oracles: the NoEmpty transport task, and
+  Example 2 (company car), whose optimal cost is 2, not the 100 of the
+  initial goal state.
+- Theorem 5's first family (`M` trucks, each with its own `N`
+  packages): pruning is non-zero and about `M + 1` states are stored,
+  against exponentially many in `M` without it.
+- The `search` fuzz target sets `stubborn_sets` from its input.
+- `Statistics::stubborn_pruned` counts the successors the sets remove.
+
 ## Reachability-only leaves
 
 `Leaves::Reachability` closes leaves with every leaf action at cost 0, so
@@ -569,6 +671,9 @@ stubborn sets), and multiple centers.
   doi:10.1016/j.artint.2017.12.004.
 - Daniel Gnad, Jörg Hoffmann and Carmel Domshlak. *From Fork Decoupling
   to Star-Topology Decoupling.* SoCS 2015.
+- Daniel Gnad, Jörg Hoffmann and Martin Wehrle. *Strong Stubborn Set
+  Pruning for Star-Topology Decoupled State Space Search.* JAIR 65 (2019),
+  pp. 343–392. doi:10.1613/jair.1.11576.
 - Daniel Gnad, Valerie Poser and Jörg Hoffmann. *Beyond Forks: Finding and
   Ranking Star Factorings for Decoupled Search.* IJCAI 2017, pp. 4310–4316.
 - Álvaro Torralba, Daniel Gnad, Patrick Dubbert and Jörg Hoffmann. *On
