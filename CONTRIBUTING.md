@@ -92,9 +92,9 @@ GitHub Releases. The `vX.Y.Z` tag then triggers `publish-crates-io.yml`, which
 publishes the crate to crates.io via trusted publishing from the protected `crates-io`
 environment.
 
-Release automation is dormant until the release GitHub App is configured: the release-plz
-jobs run only when the repository variable `RELEASE_APP_CLIENT_ID` is set (with the secret
-`RELEASE_APP_PRIVATE_KEY`). Setting the variable activates releases.
+The release-plz jobs authenticate as the release GitHub App, through the repository
+variable `RELEASE_APP_CLIENT_ID` and the secret `RELEASE_APP_PRIVATE_KEY`; without the
+variable they are skipped.
 
 ## License
 

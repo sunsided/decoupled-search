@@ -225,7 +225,7 @@ matched by staying (`x' ⪯ y`) or by a leaf action `b` with `cost(b) <=
 cost(a)` and center preconditions contained in `a`'s, `y -b-> y'`, `x' ⪯
 y'`. It is computed once per leaf by worklist refinement.
 
-*Folding `g` in (the open question of the earlier design).* Leaf prices
+*Folding `g` in.* Leaf prices
 exclude `g`. The classic rule, `g(t) <= g(n)` and every bound at most the
 price, is used with `fold_g = false`. Comparing `g + price` per leaf state
 would be unsound with two or more leaves: `g` is paid once but credited
@@ -531,7 +531,7 @@ Invalid tasks are rejected via `Task::validate`.
 - The seeded cross-checks loop seeds deterministically. Tests build with
   `opt-level = 1`.
 
-## Not yet implemented
+## Limitations
 
 `inverted_fork` and `x_shape` may still split the inputs of a derived variable over two
 leaves (the search rejects those factorings and `auto` skips them). Also open: an index for
@@ -546,8 +546,8 @@ stubborn sets), and multiple centers.
 - `sas-plus`: `State` does not implement `Ord`, so `no_std` maps keyed by
   states need a `Vec<Value>` key. An `Ord` derive would help.
 - `heuristic-search`: the test-only Dijkstra here could be replaced by its
-  implementation, and decoupled search could reuse its open
-  lists.
+  `dijkstra`, and decoupled search could reuse its open lists if the crate
+  exported them (`open_list` is private).
 - `search-core`: a shared `Plan { ops, cost }` type (with validation) would
   avoid one more local definition.
 - `merge-and-shrink`: an accessor for `MergeAndShrinkHeuristic`'s final
