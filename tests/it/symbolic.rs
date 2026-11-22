@@ -201,6 +201,23 @@ fn unsupported_options_are_rejected() {
         stubborn_sets: true,
         ..basic
     }));
+    let center = Config {
+        symbolic_center: true,
+        fold_g: false,
+        ..basic
+    };
+    assert!(
+        rejected(Config {
+            fold_g: true,
+            ..center
+        }),
+        "fold_g"
+    );
+    let anytime = center.anytime_astar(&task, &factoring, &crate::Blind, &crate::Blind);
+    assert!(
+        matches!(anytime, Err(Error::SymbolicUnsupported { .. })),
+        "anytime A*"
+    );
 }
 
 /// With a symbolic center, uniform-cost search and A* find the Dijkstra
@@ -208,6 +225,7 @@ fn unsupported_options_are_rejected() {
 /// factoring and with symbolic or enumerated leaves; every plan validates.
 #[test]
 fn symbolic_center_keeps_optimal_costs() {
+    let mut grouped_differs = 0;
     let params = RandomTaskParams {
         num_vars: 5,
         max_domain: 3,
@@ -220,7 +238,7 @@ fn symbolic_center_keeps_optimal_costs() {
             op.cost = 0;
         }
         let optimal = optimal_cost(&task);
-        let (h_max, h_ff) = (HMax::new(&task), HFf::new(&task));
+        let h_ff = HFf::new(&task);
         for factoring in factorings(&task) {
             for (symbolic_leaves, leaves) in [
                 (true, Leaves::Priced),
@@ -248,11 +266,51 @@ fn symbolic_center_keeps_optimal_costs() {
                 }
                 let uniform = config.search(&task, &factoring).expect("supported");
                 assert_eq!(cost(&task, &uniform), optimal, "uniform {what}");
-                let informed = config.astar(&task, &factoring, &h_max).expect("supported");
-                assert_eq!(cost(&task, &informed), optimal, "A* {what}");
+                for (name, h) in heuristics(&task) {
+                    let informed = config.astar(&task, &factoring, &*h).expect("supported");
+                    assert_eq!(cost(&task, &informed), optimal, "A* {name} {what}");
+                }
+                let concrete = Config {
+                    symbolic_center: false,
+                    ..config
+                };
+                let explicit = concrete.search(&task, &factoring).expect("supported");
+                if explicit.statistics.stored != uniform.statistics.stored {
+                    grouped_differs += 1;
+                }
             }
         }
     }
+
+    assert!(
+        grouped_differs > 0,
+        "the symbolic center never stored a different number of nodes"
+    );
+}
+
+/// Every admissible heuristic of the crate, by name: center facts that
+/// several members of a symbolic-center node have all arrive at price 0.
+fn heuristics(task: &Task) -> Vec<(&'static str, Box<dyn DecoupledHeuristic>)> {
+    let mut all: Vec<(&'static str, Box<dyn DecoupledHeuristic>)> =
+        vec![("h^max", Box::new(HMax::new(task)))];
+    #[cfg(feature = "lm-cut")]
+    {
+        use decoupled_search::LmCutHeuristic;
+        all.push(("LM-cut", Box::new(LmCutHeuristic::new(task))));
+        all.push((
+            "LM-cut levels",
+            Box::new(LmCutHeuristic::with_price_levels(task)),
+        ));
+    }
+    #[cfg(feature = "merge-and-shrink")]
+    {
+        use decoupled_search::MasHeuristic;
+        use merge_and_shrink::{Bisimulation, MergeAndShrink, SccDfp};
+        let mas = MergeAndShrink::new(SccDfp::new(task), Bisimulation);
+        all.push(("merge-and-shrink", Box::new(MasHeuristic::build(task, mas))));
+    }
+
+    all
 }
 
 /// `n` center switches that each turn on at cost 1 and one leaf that steps

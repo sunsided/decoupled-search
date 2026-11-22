@@ -381,9 +381,11 @@ pub struct Config {
     /// [`Config::symbolic_leaves`] and [`Config::symbolic_min_states`].
     /// Default: `false`.
     ///
-    /// Each member is an ordinary decoupled state, so cost-optimal searches
-    /// stay optimal; the nodes differ from the explicit search's, so the
-    /// counters do too. Supports uniform-cost search, A* and GBFS with
+    /// This is the crate's own formulation, not a published one;
+    /// `docs/design.md` argues why it is sound, and the randomized
+    /// cross-checks against Dijkstra test it. Each member is an ordinary
+    /// decoupled state, so cost-optimal searches stay optimal; the nodes
+    /// differ from the explicit search's, so the counters do too. Supports uniform-cost search, A* and GBFS with
     /// [`Pruning::Basic`] and [`Config::fold_g`] off, under the same
     /// restrictions as [`Config::symbolic_leaves`]; anytime A* and `fold_g`
     /// are rejected with [`Error::SymbolicUnsupported`]. Heuristics see a

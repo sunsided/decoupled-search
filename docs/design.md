@@ -87,7 +87,12 @@ Strategies:
    and write each other (those operators are global) and the center may
    be empty. On the paper's Example 1 (agents that charge each other's
    batteries) it finds one leaf per agent with its battery around an empty
-   center, where no star strategy has two mobile leaves. The other
+   center, where no star strategy has two mobile leaves. On 96 of 100
+   random tasks it has two or more mobile leaves without being a star, and
+   decoupled search over those matches Dijkstra. `Factoring::auto` now
+   returns it on 171 of 200 unstructured random tasks (where star
+   strategies rarely find two mobile leaves) and on 2 of 200 random star
+   tasks. The other
    objectives (mobility, balanced mobility, fact flexibility) and the
    minimum leaf flexibility constraint are not implemented.
 
@@ -593,7 +598,11 @@ and `fold_g` are rejected.
   exactly on solvable tasks, with symbolic and enumerated leaves and both
   leaf modes; every plan validates. On `n = 8` center switches that turn on
   independently (and one leaf), it stores `n + 1` nodes where the explicit
-  center stores `2^n`.
+  center stores `2^n`. On the random tasks, A\* keeps the Dijkstra cost
+  under every heuristic of the crate (`h^max`, both LM-cut modes,
+  merge-and-shrink), and the symbolic center stores a different number of
+  nodes than the concrete one in some runs, so merging and member-wise
+  dominance are exercised.
 - `benches/search.rs` (`bench_symbolic`), uniform-cost search under basic
   dominance, `--quick` on one machine: the gripper fork (tiny leaves) takes
   18 µs explicit and 363 µs symbolic; one leaf of `n` binary variables

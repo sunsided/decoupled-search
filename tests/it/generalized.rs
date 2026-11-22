@@ -2,6 +2,7 @@
 //! Example 1: battery-powered agents that can charge each other.
 
 use decoupled_search::{Config, Factoring, Pruning, Strategy};
+use sas_plus::random::{RandomTaskParams, random_task};
 use sas_plus::{Effect, Fact, Operator, State, Task, Variable};
 
 use crate::checked_cost;
@@ -144,4 +145,40 @@ fn auto_picks_the_generalized_factoring() {
     let task = agents(3, 3, 8);
 
     assert_eq!(Factoring::auto(&task), Factoring::generalized(&task));
+}
+
+/// On random tasks, the generalized factoring often has two or more mobile
+/// leaves without being a star; there, decoupled search over it matches
+/// Dijkstra under every cross-check configuration.
+#[test]
+fn non_star_generalized_factorings_match_dijkstra() {
+    let params = RandomTaskParams {
+        num_vars: 5,
+        max_domain: 3,
+        num_ops: 10,
+        ..RandomTaskParams::default()
+    };
+    let mut non_star = 0;
+    for seed in 0..100 {
+        let task = random_task(seed, params);
+        let factoring = Factoring::generalized(&task);
+        let Ok(score) = factoring.score(&task) else {
+            continue;
+        };
+        if score.mobile_leaves < 2 || factoring.check_star(&task).is_ok() {
+            continue;
+        }
+
+        non_star += 1;
+        assert_eq!(
+            checked_cost(&task, &factoring),
+            optimal_cost(&task),
+            "seed {seed}"
+        );
+    }
+
+    assert!(
+        non_star > 10,
+        "only {non_star} non-star generalized factorings"
+    );
 }
