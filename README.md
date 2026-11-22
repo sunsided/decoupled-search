@@ -21,6 +21,8 @@ search, the dominance pruning of Torralba, Gnad, Dubbert and Hoffmann (2016) and
 an independent plan validator. It is `no_std` with `alloc`, with and without the optional features
 except `symbolic-leaves`, which needs `std`.
 
+Part of the [planning and search crates](https://sunsided.github.io/planning-and-search/); see also this crate's [overview page](https://sunsided.github.io/planning-and-search/crates/decoupled-search/).
+
 ## Who this is for
 
 - Planning researchers working on star-topology decoupling, factoring selection or dominance pruning who want a
