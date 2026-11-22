@@ -32,7 +32,7 @@ rustdoc-args = ["--html-in-header", "docs/mermaid.html"]
 sas-plus = { version = "0.2.1", default-features = false }
 merge-and-shrink = { version = "0.3.0", optional = true }
 # LmCut (see docs/design.md).
-planning-heuristics = { version = "0.1", optional = true }
+planning-heuristics = { version = "0.2", optional = true }
 
 [features]
 ## A merge-and-shrink heuristic on decoupled states (`MasHeuristic`).
