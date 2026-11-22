@@ -2,7 +2,7 @@
 # is merged, creates the vX.Y.Z tag and GitHub Releases. It never publishes: the
 # tag push starts publish-crates-io.yml, which publishes from the tag-restricted `crates-io` environment.
 # The App token matters: tags and PRs created with GITHUB_TOKEN would not trigger other workflows.
-# Dormant until the repository variable RELEASE_APP_CLIENT_ID is set; setting it activates releases.
+# Jobs skip on forks and wherever the repository variable RELEASE_APP_CLIENT_ID is unset.
 name: Release-plz
 
 on:
